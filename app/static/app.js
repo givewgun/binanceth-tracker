@@ -183,7 +183,11 @@ function renderKpis() {
     `${fmtPct(t.total_pnl_pct[state.ccy])} on ${fmtMoney(pick(t.net_invested))} net in`;
 
   $('#kpi-cost').textContent = fmtMoney(pick(t.cost));
-  $('#kpi-fees').textContent = `${fmtMoney(pick(t.fees))} paid in fees`;
+  const excluded = pick(t.excluded);
+  $('#kpi-fees').textContent = excluded
+    ? `${fmtMoney(excluded)} has no basis (${t.unknown_assets.join(', ')}) `
+      + `and is left out of PnL`
+    : `${fmtMoney(pick(t.fees))} paid in fees`;
 
   $('#fx-chip').textContent = t.fx_rate
     ? `1 USDT = ฿${fmt(t.fx_rate, { digits: 4 })}` : 'USDT rate unavailable';
@@ -277,8 +281,13 @@ function renderHoldings() {
     row.appendChild(cell(fmtMoney(pick(p.value))));
 
     const unrealised = pick(p.unrealised);
-    row.appendChild(cell(p.is_cash ? '—' : fmtMoney(unrealised, { sign: true }),
-                         p.is_cash ? '' : signClass(unrealised)));
+    // A holding with no costed part has no knowable profit — say so rather
+    // than printing a zero that looks measured.
+    const uncosted = p.basis_unknown && !pick(p.cost);
+    row.appendChild(cell(
+      p.is_cash || uncosted ? (uncosted ? 'no basis' : '—')
+                            : fmtMoney(unrealised, { sign: true }),
+      p.is_cash || uncosted ? 'muted' : signClass(unrealised)));
     row.appendChild(cell(p.is_cash ? '—' : fmtPct(p.roi[state.ccy]),
                          p.is_cash ? '' : signClass(p.roi[state.ccy])));
 

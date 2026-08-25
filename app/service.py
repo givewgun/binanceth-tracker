@@ -176,6 +176,8 @@ class PortfolioService:
         return {
             "equity": money(equity),
             "cost": money(cost),
+            "excluded": money(state.excluded_value),
+            "unknown_assets": state.unknown_assets,
             "unrealised": money(unrealised),
             "realised": money(realised),
             "fees": money(state.fees_paid),
@@ -214,6 +216,9 @@ class PortfolioService:
             "weight": weight,
             "price_source": p.price_source,
             "cost_assumed": p.cost_assumed,
+            "basis_unknown": p.basis_unknown,
+            "unknown_qty": num(p.unknown_qty),
+            "excluded_value": money(p.excluded_value),
             "is_cash": p.price_source == "cash",
             "lots": [
                 {"qty": num(l.qty), "cost": money(l.cost),

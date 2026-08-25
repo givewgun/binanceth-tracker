@@ -112,7 +112,24 @@ class PortfolioState:
 
     @property
     def unrealised(self) -> Money:
-        return self.market_value - self.cost
+        # Summed per position rather than ``market_value - cost``: holdings
+        # with no known basis contribute value but must not contribute profit.
+        total = Money()
+        for p in self.positions.values():
+            total = total + p.unrealised
+        return total
+
+    @property
+    def excluded_value(self) -> Money:
+        """Market value the tracker refuses to claim a profit or loss on."""
+        total = Money()
+        for p in self.positions.values():
+            total = total + p.excluded_value
+        return total
+
+    @property
+    def unknown_assets(self) -> list[str]:
+        return sorted(p.asset for p in self.positions.values() if p.basis_unknown)
 
     @property
     def net_invested(self) -> Money:
@@ -435,6 +452,42 @@ async def build_portfolio(store, oracle: PriceOracle, *,
                           fx_mode: Optional[str] = None,
                           treat_withdrawal_as_sale: Optional[bool] = None,
                           reconcile: bool = True) -> PortfolioState:
+    """Value the account with whichever cost-basis engine is configured."""
+    method = method or settings.cost_basis_method
+    if method == "simple":
+        return await _build_simple(store, oracle)
+    return await _build_fifo(
+        store, oracle, method=method, fx_mode=fx_mode,
+        treat_withdrawal_as_sale=treat_withdrawal_as_sale, reconcile=reconcile,
+    )
+
+
+async def _build_simple(store, oracle: PriceOracle) -> PortfolioState:
+    """Average cost, with holdings the exchange cannot explain left uncosted."""
+    from .costbasis_simple import build_simple_state
+    from .holdings import HoldingsError, load_holdings
+
+    try:
+        holdings = load_holdings(settings.holdings_path)
+    except HoldingsError as exc:
+        # A silently ignored cost file is worse than no cost file: you would
+        # think your basis was counted when it was not.
+        raise HoldingsError(f"{settings.holdings_path}: {exc}") from exc
+
+    return await build_simple_state(
+        trades=store.trades(),
+        balances=store.balances(),
+        oracle=oracle,
+        holdings=holdings,
+        fiat=settings.fiat,
+    )
+
+
+async def _build_fifo(store, oracle: PriceOracle, *,
+                      method: Optional[str] = None,
+                      fx_mode: Optional[str] = None,
+                      treat_withdrawal_as_sale: Optional[bool] = None,
+                      reconcile: bool = True) -> PortfolioState:
     """Replay everything, then square the books against live balances."""
     engine = CostBasisEngine(
         oracle,

@@ -1,6 +1,7 @@
 """A stand-in Binance TH server, for developing without hitting the real API.
 
-Speaks the ``/open/v1`` dialect (pass ``--dialect apiv3`` for the other one) and
+Speaks the ``/open/v1`` dialect (pass ``--dialect thv1``/``apiv3`` for the
+others) and
 serves a synthetic account that exercises the interesting cases: baht-quoted
 buys, tether-quoted buys, a stablecoin funding leg, fiat deposits, a crypto
 withdrawal and a BNB-paid commission.
@@ -155,7 +156,8 @@ class Handler(BaseHTTPRequestHandler):
         path, query = url.path, url.query
         params = dict(parse_qsl(query))
         signed = any(k in path for k in
-                     ("account", "myTrades", "orders/trades", "deposit", "withdraw"))
+                     ("account", "myTrades", "userTrades", "orders/trades", "deposit",
+                      "withdraw"))
 
         if signed:
             if self.headers.get("X-MBX-APIKEY") is None:
@@ -164,23 +166,25 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send({"code": -1022, "msg": "bad signature"}, 401)
 
         # --- public ---------------------------------------------------
-        if path in ("/open/v1/common/time", "/api/v3/time"):
+        if path in ("/open/v1/common/time", "/api/v3/time", "/api/v1/time"):
             return self._send(self._wrap({"serverTime": int(time.time() * 1000)}))
 
-        if path in ("/open/v1/common/symbols", "/api/v3/exchangeInfo"):
+        if path in ("/open/v1/common/symbols", "/api/v3/exchangeInfo",
+                    "/api/v1/exchangeInfo"):
             rows = [{"symbol": s, "baseAsset": b, "quoteAsset": q, "status": "TRADING"}
                     for s, b, q in SYMBOLS]
             if self.dialect == "openv1":
                 return self._send(self._wrap({"list": rows}))
             return self._send({"symbols": rows})
 
-        if path in ("/open/v1/market/tickers", "/api/v3/ticker/price"):
+        if path in ("/open/v1/market/tickers", "/api/v3/ticker/price",
+                    "/api/v1/ticker/price"):
             rows = [{"symbol": s, "price": f"{p:.8f}"} for s, p in SPOT.items()]
             if self.dialect == "openv1":
                 return self._send(self._wrap({"list": rows}))
             return self._send(rows)
 
-        if path in ("/open/v1/market/klines", "/api/v3/klines"):
+        if path in ("/open/v1/market/klines", "/api/v3/klines", "/api/v1/klines"):
             symbol = params.get("symbol", "")
             interval = params.get("interval", "1d")
             start = int(params.get("startTime") or NOW - 400 * DAY)
@@ -193,12 +197,13 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(rows)
 
         # --- signed ---------------------------------------------------
-        if path in ("/open/v1/account/spot", "/api/v3/account"):
+        if path in ("/open/v1/account/spot", "/api/v3/account", "/api/v1/accountV2"):
             if self.dialect == "openv1":
                 return self._send(self._wrap({"accountAssets": balances()}))
             return self._send({"balances": balances()})
 
-        if path in ("/open/v1/orders/trades", "/api/v3/myTrades"):
+        if path in ("/open/v1/orders/trades", "/api/v3/myTrades",
+                    "/api/v1/userTrades"):
             symbol = params.get("symbol", "")
             rows = trade_rows(symbol)
             if "startTime" in params:
@@ -210,7 +215,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(self._wrap({"list": rows}))
             return self._send(rows)
 
-        if path in ("/open/v1/deposits", "/sapi/v1/capital/deposit/hisrec"):
+        if path in ("/open/v1/deposits", "/sapi/v1/capital/deposit/hisrec",
+                    "/api/v1/capital/deposit/history"):
             rows = [{"id": i, "asset": a, "coin": a, "amount": str(amt),
                      "insertTime": NOW - d * DAY, "status": 1, "network": "BSC",
                      "txId": f"0x{i}"} for i, a, amt, d, _ in DEPOSITS]
@@ -219,7 +225,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(self._wrap({"list": rows}))
             return self._send(rows)
 
-        if path in ("/open/v1/withdraws", "/sapi/v1/capital/withdraw/history"):
+        if path in ("/open/v1/withdraws", "/sapi/v1/capital/withdraw/history",
+                    "/api/v1/capital/withdraw/history"):
             rows = [{"id": i, "asset": a, "coin": a, "amount": str(amt),
                      "applyTime": NOW - d * DAY, "status": 6,
                      "transactionFee": str(fee), "network": "BSC",
@@ -241,7 +248,7 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=9998)
-    parser.add_argument("--dialect", default="openv1", choices=["openv1", "apiv3"])
+    parser.add_argument("--dialect", default="openv1", choices=["openv1", "apiv3", "thv1"])
     args = parser.parse_args()
     Handler.dialect = args.dialect
     server = HTTPServer(("127.0.0.1", args.port), Handler)

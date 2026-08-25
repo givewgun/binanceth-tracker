@@ -14,6 +14,7 @@ falls over on a renamed key is useless.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Iterable, Optional
 
 from .models import Balance, D, SymbolInfo, Trade, Transfer
@@ -49,14 +50,36 @@ def rows(payload: Any, *containers: str) -> list[dict]:
     return []
 
 
+def _parse_datetime(value: Any) -> int:
+    """Epoch ms for a UTC datetime string, or 0 if it is not one."""
+    text = str(value).strip().replace("/", "-")
+    if not text:
+        return 0
+    if text.endswith("Z"):
+        text = text[:-1]
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M",
+                "%Y-%m-%d"):
+        try:
+            stamp = datetime.strptime(text, fmt).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+        return int(stamp.timestamp() * 1000)
+    return 0
+
+
 def as_ms(value: Any) -> int:
-    """Normalise a timestamp to epoch milliseconds."""
+    """Normalise a timestamp to epoch milliseconds.
+
+    Withdrawal history reports ``applyTime`` as a UTC datetime *string*
+    ("2025-01-29 04:13:50") while everything else uses epoch numbers, so both
+    have to be understood or every withdrawal lands on 1970-01-01.
+    """
     if value is None:
         return 0
     try:
         n = int(float(value))
     except (TypeError, ValueError):
-        return 0
+        return _parse_datetime(value)
     if n > 10**15:      # microseconds
         return n // 1000
     if n < 10**11:      # seconds
@@ -402,10 +425,67 @@ class ApiV3Dialect(Dialect):
         return "/sapi/v1/fiat/orders", params
 
 
-DIALECTS: dict[str, Dialect] = {d.name: d for d in (OpenV1Dialect(), ApiV3Dialect())}
+class ThV1Dialect(Dialect):
+    """The surface Binance TH actually serves: ``api.binance.th`` + ``/api/v1``.
+
+    Documented at https://www.binance.th/api-docs/en/.  It is binance.com
+    shaped — ``X-MBX-APIKEY``, HMAC over the query string, bare (unwrapped)
+    JSON bodies — but the paths carry a ``v1`` prefix, the account endpoint is
+    ``accountV2``, trade history is ``userTrades`` rather than ``myTrades``,
+    and the capital endpoints live under ``/api/v1`` instead of ``/sapi/v1``.
+    """
+
+    name = "thv1"
+    probe_path = "/api/v1/time"
+
+    def time(self): return "/api/v1/time", {}
+    def symbols(self): return "/api/v1/exchangeInfo", {}
+    def prices(self): return "/api/v1/ticker/price", {}
+
+    def klines(self, symbol, interval, start, end, limit):
+        params = {"symbol": symbol, "interval": interval, "limit": limit}
+        if start: params["startTime"] = start
+        if end: params["endTime"] = end
+        return "/api/v1/klines", params
+
+    def account(self): return "/api/v1/accountV2", {}
+
+    def my_trades(self, symbol, start, end, from_id, limit):
+        params = {"symbol": symbol, "limit": limit}
+        if from_id:
+            params["fromId"] = from_id
+        else:
+            if start: params["startTime"] = start
+            if end: params["endTime"] = end
+        return "/api/v1/userTrades", params
+
+    def deposits(self, start, end, asset, limit):
+        params = {"limit": limit}
+        if start: params["startTime"] = start
+        if end: params["endTime"] = end
+        if asset: params["coin"] = asset
+        return "/api/v1/capital/deposit/history", params
+
+    def withdrawals(self, start, end, asset, limit):
+        params = {"limit": limit}
+        if start: params["startTime"] = start
+        if end: params["endTime"] = end
+        if asset: params["coin"] = asset
+        return "/api/v1/capital/withdraw/history", params
+
+
+#: Probed in order. ``thv1`` is what the live exchange serves; the other two
+#: are kept for older/other white-label deployments of the same spec.
+DIALECTS: dict[str, Dialect] = {
+    d.name: d for d in (ThV1Dialect(), OpenV1Dialect(), ApiV3Dialect())
+}
 
 #: Hosts tried in order when no BINANCE_TH_BASE_URL is configured.
+#:
+#: ``www.binance.th`` is deliberately absent: it answers ``/api/v3/*`` by
+#: proxying *global* binance.com (ask it for BTCTHB and it says "Invalid
+#: symbol"), so probing it succeeds on public endpoints and then every signed
+#: request fails with -2015 because a Binance TH key is unknown over there.
 BASE_URL_CANDIDATES = (
     "https://api.binance.th",
-    "https://www.binance.th",
 )

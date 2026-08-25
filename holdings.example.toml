@@ -1,0 +1,26 @@
+# Cost of coins you already held before the exchange's trade history begins.
+#
+# Binance TH returns fills from a fixed point onward and nothing before it, and
+# exposes no endpoint reporting what you paid. Anything you were holding across
+# that boundary therefore has no purchase on record. This file is where you
+# supply the number.
+#
+# It only needs to cover the unexplained remainder, so it is usually three or
+# four entries. Run `./run.cmd sync` (or ./run.sh) and the summary prints a
+# "no basis" line naming exactly which assets are missing and how much they are
+# worth — those are the ones to add here.
+#
+# Anything you leave out is not guessed at: it counts toward your balance and
+# allocation, and is excluded from cost basis and profit entirely.
+#
+# Copy this file to holdings.toml to use it.
+
+# [BTC]
+# qty = 0.14676540        # optional — omit to cover the whole unexplained amount
+# cost_thb = 2100000      # TOTAL paid for that quantity, not the price per coin
+
+# [SOL]
+# cost_usdt = 4500        # either currency; the other is derived at today's rate
+
+# [HBAR]
+# cost_thb = 45

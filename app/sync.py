@@ -26,6 +26,7 @@ log = logging.getLogger("binanceth.sync")
 
 DAY_MS = 86_400_000
 WINDOW_MS = 89 * DAY_MS          # stay inside the venue's 90-day cap
+TRADE_PAGE = 500                 # rows per myTrades/userTrades request
 DEFAULT_LOOKBACK_DAYS = 1460     # four years is past any retail account's start
 
 
@@ -121,54 +122,40 @@ class Synchroniser:
         return len(balances)
 
     async def sync_trades_for(self, symbol: str, full: bool = False) -> int:
-        """Page one symbol's fills into the database."""
+        """Page one symbol's fills into the database.
+
+        Always by trade id, never by time window.  Binance TH caps a trade
+        query at a 7-day span, so covering years of history in windows would
+        mean hundreds of mostly-empty requests per symbol — and the venue
+        returns its whole record from ``fromId=1`` anyway.  (Zero is rejected;
+        one is the first valid id.)
+        """
         known = self.oracle.symbols
         quotes = self.oracle.quote_assets
         added = 0
 
-        from_id = None if full else self.store.last_trade_id(symbol)
-        if from_id:
-            # Numeric-id paging: walk forward from what we already hold.
-            cursor = int(from_id) + 1
-            for _ in range(200):
-                try:
-                    trades = await self.client.my_trades(
-                        symbol, from_id=str(cursor), limit=500,
-                        known=known, quotes=quotes)
-                except BinanceTHError as exc:
-                    if exc.is_unsupported:
-                        break
-                    raise
-                if not trades:
-                    break
-                added += self.store.upsert_trades(trades)
-                numeric = [int(t.trade_id) for t in trades if t.trade_id.isdigit()]
-                if not numeric or len(trades) < 500:
-                    break
-                cursor = max(numeric) + 1
-            return added
+        last_id = None if full else self.store.last_trade_id(symbol)
+        cursor = int(last_id) + 1 if last_id and last_id.isdigit() else 1
 
-        # Time-window paging for a first (or forced full) sync.
-        start = self._lookback_start() if full else max(
-            self.store.last_trade_time(symbol) + 1, self._lookback_start())
-        now = self._now()
-        while start < now:
-            end = min(start + WINDOW_MS, now)
+        for _ in range(200):
             try:
                 trades = await self.client.my_trades(
-                    symbol, start=start, end=end, limit=500,
+                    symbol, from_id=str(cursor), limit=TRADE_PAGE,
                     known=known, quotes=quotes)
             except BinanceTHError as exc:
                 if exc.is_unsupported:
                     break
                 raise
+            if not trades:
+                break
             added += self.store.upsert_trades(trades)
-            if len(trades) >= 500:
-                # Window saturated — advance to just after the last fill.
-                latest = max(t.time for t in trades)
-                start = latest + 1 if latest > start else end + 1
-            else:
-                start = end + 1
+            numeric = [int(t.trade_id) for t in trades if t.trade_id.isdigit()]
+            if not numeric or len(trades) < TRADE_PAGE:
+                break
+            cursor = max(numeric) + 1
+        else:
+            log.warning("stopped paging %s after 200 pages; history may be "
+                        "incomplete", symbol)
         return added
 
     async def sync_trades(self, deep: bool = False, full: bool = False) -> int:
@@ -176,6 +163,8 @@ class Synchroniser:
         self._step("trades", f"scanning {len(symbols)} pairs", 0, len(symbols))
         added = 0
         empty: list[str] = []
+        failed: list[str] = []
+        last_error: Optional[BinanceTHError] = None
         for i, symbol in enumerate(symbols, 1):
             self._step("trades", symbol, i, len(symbols))
             try:
@@ -183,11 +172,22 @@ class Synchroniser:
             except BinanceTHError as exc:
                 if exc.is_auth_error:
                     raise
-                log.debug("trade sync skipped %s: %s", symbol, exc)
+                # Never demote this to debug: a rejected query looks exactly
+                # like "you have no trades" once it is swallowed, and that is
+                # how a 90-day window against a 7-day cap silently produced an
+                # empty portfolio.
+                log.warning("trade sync failed for %s: %s", symbol, exc)
+                failed.append(symbol)
+                last_error = exc
                 continue
             added += found
             if found == 0 and not self.store.last_trade_time(symbol):
                 empty.append(symbol)
+        if failed and not added:
+            raise BinanceTHError(
+                f"Every trade query was rejected ({len(failed)} symbols); "
+                f"last error: {last_error}"
+            )
         if empty:
             previous = set((self.store.get_meta("empty_symbols", "") or "").split(","))
             previous.update(empty)

@@ -44,6 +44,7 @@ def _str(name: str, default: str = "") -> str:
     return (os.getenv(name) or default).strip()
 
 
+
 @dataclass
 class Settings:
     api_key: str = field(default_factory=lambda: _str("BINANCE_TH_API_KEY"))
@@ -52,9 +53,14 @@ class Settings:
     dialect: str = field(default_factory=lambda: _str("BINANCE_TH_DIALECT"))
     recv_window: int = field(default_factory=lambda: _int("BINANCE_TH_RECV_WINDOW", 10000))
 
+
     base_currency: str = field(default_factory=lambda: _str("BASE_CURRENCY", "THB").upper())
     cost_basis_method: str = field(
-        default_factory=lambda: _str("COST_BASIS_METHOD", "fifo").lower()
+        default_factory=lambda: _str("COST_BASIS_METHOD", "simple").lower()
+    )
+    #: Cost of coins acquired before the exchange's history begins.
+    holdings_file: str = field(
+        default_factory=lambda: _str("HOLDINGS_FILE", "holdings.toml")
     )
     fx_mode: str = field(default_factory=lambda: _str("FX_MODE", "lots").lower())
     treat_withdrawal_as_sale: bool = field(
@@ -72,6 +78,11 @@ class Settings:
     fiat: str = "THB"
     #: Preferred quote assets when routing a price for an arbitrary coin.
     quote_preference: tuple[str, ...] = ("THB", "USDT", "BTC", "BNB", "ETH")
+
+    @property
+    def holdings_path(self) -> Path:
+        p = Path(self.holdings_file)
+        return p if p.is_absolute() else ROOT / p
 
     @property
     def db_file(self) -> Path:
@@ -97,6 +108,7 @@ class Settings:
             "dialect": self.dialect or "(auto-detect)",
             "base_currency": self.base_currency,
             "cost_basis_method": self.cost_basis_method,
+            "holdings_file": self.holdings_file,
             "fx_mode": self.fx_mode,
             "treat_withdrawal_as_sale": self.treat_withdrawal_as_sale,
         }

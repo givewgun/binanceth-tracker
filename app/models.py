@@ -184,7 +184,10 @@ class Disposal:
     def counts_as_realised(self) -> bool:
         # 'transfer-out' is a move between wallets and 'funding' is a stablecoin
         # conversion whose basis was carried onward — neither is a gain or loss.
-        return self.reason not in ("transfer-out", "funding")
+        # 'unknown-basis' is a sale out of a bag the exchange has no purchase
+        # record for: proceeds without a cost are not profit, they are an
+        # unknown, and booking them would invent a gain of the entire sale.
+        return self.reason not in ("transfer-out", "funding", "unknown-basis")
 
 
 @dataclass(slots=True)
@@ -202,16 +205,45 @@ class Position:
     cost_assumed: bool = False
     free: Decimal = ZERO
     locked: Decimal = ZERO
+    #: Quantity the exchange gave us no purchase record for and no manual cost
+    #: covers. It is real — you hold it — but its profit is unknowable, so it
+    #: is kept out of every cost and PnL figure instead of being guessed at.
+    unknown_qty: Decimal = ZERO
+
+    @property
+    def costed_qty(self) -> Decimal:
+        """The part of the holding whose cost we actually know."""
+        return self.qty - self.unknown_qty
+
+    @property
+    def costed_value(self) -> Money:
+        """Market value of the costed part only."""
+        if self.qty == 0 or self.unknown_qty == 0:
+            return self.market_value
+        return self.market_value.scaled(self.costed_qty, self.qty)
+
+    @property
+    def excluded_value(self) -> Money:
+        """Market value carrying no basis — reported, never counted as gain."""
+        if self.unknown_qty == 0:
+            return Money()
+        return self.market_value.scaled(self.unknown_qty, self.qty)
+
+    @property
+    def basis_unknown(self) -> bool:
+        return self.unknown_qty != 0
 
     @property
     def unrealised(self) -> Money:
-        return self.market_value - self.cost
+        return self.costed_value - self.cost
 
     @property
     def avg_cost(self) -> Money:
-        if self.qty == 0:
+        """Average cost of the costed quantity, not of the whole holding."""
+        qty = self.costed_qty
+        if qty == 0:
             return Money()
-        return Money(self.cost.thb / self.qty, self.cost.usdt / self.qty)
+        return Money(self.cost.thb / qty, self.cost.usdt / qty)
 
     def roi(self, currency: str) -> Optional[Decimal]:
         basis = self.cost.get(currency)

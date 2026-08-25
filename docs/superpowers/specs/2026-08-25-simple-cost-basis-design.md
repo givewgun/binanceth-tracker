@@ -14,7 +14,7 @@ Measured against the live API on 2026-08-25:
 
 | Source | What it returns |
 | --- | --- |
-| `GET /api/v1/userTrades` | Fills from 2026-08-20 onward. `fromId` paging reaches nothing older; `fromId=0` is rejected outright. |
+| `GET /api/v1/userTrades` | Called bare, only the most recent page — which is what made the history look like it began on 2026-08-20. Paged from `fromId=1` it returns the whole record, back to 2024-11-29 on this account. (`fromId=0` is rejected; one is the first valid id.) A time-windowed query is capped at 7 days, so paging by id is the only practical route. |
 | `GET /api/v1/capital/deposit/history` | Nothing after 2026-04-16. |
 | `GET /api/v1/capital/withdraw/history` | Nothing after 2025-01-29. |
 | Cost basis / average price | No endpoint. `asset/getUserAsset`, `asset/assetDetail`, `accountSnapshot` all 404. The average cost shown in the Binance app comes from their web-internal API, not the key-authenticated one. |
@@ -31,11 +31,17 @@ HBAR       0.90000000     0.00000000     0.90000000
 THB   1114630.05377664  -1274.46835675  1115904.52213339
 ```
 
-ETH is fully covered. Everything else is partly or wholly unexplainable. A
-ledger engine fed a half-ledger does not produce approximate answers — it
-produces confident wrong ones. Today it silently costs unexplained quantity at
-*today's* price, manufacturing a 0.00 unrealised figure that looks like a
-measurement and is not.
+Those figures were measured while trade sync was still truncating history to a
+single page. With id paging the trade record is nearly complete and the gap
+collapses to HBAR alone — 0.9 coins, worth about 2.37 baht, which arrived by a
+deposit predating the record.
+
+The design still holds, for two reasons. Transfers genuinely stop in April and
+fiat movements are invisible, so quantity the fills cannot explain remains a
+permanent feature of this exchange; and a ledger engine fed a partial ledger
+does not produce approximate answers, it produces confident wrong ones. Today
+it silently costs unexplained quantity at *today's* price, manufacturing a 0.00
+unrealised figure that looks like a measurement and is not.
 
 ## Design
 

@@ -5,6 +5,9 @@
 *.key
 secrets.json
 
+# Personal cost figures — the example stays, yours does not
+holdings.toml
+
 # Local data
 data/
 *.db

@@ -53,10 +53,12 @@ def app_env(server, tmp_path, monkeypatch):
     oracle = PriceOracle(client, store)
     syncer = Synchroniser(client, store, oracle)
     monkeypatch.setattr(settings, "db_path", str(tmp_path / "t.db"))
+    # The developer's own .env may select a different engine.
+    monkeypatch.setattr(settings, "cost_basis_method", "fifo")
     yield store, client, oracle, syncer
 
 
-@pytest.mark.parametrize("dialect", ["openv1", "apiv3"])
+@pytest.mark.parametrize("dialect", ["thv1", "openv1", "apiv3"])
 @pytest.mark.asyncio
 async def test_full_sync_and_valuation(app_env, dialect, monkeypatch):
     from app.client import BinanceTHClient

@@ -4,8 +4,26 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import sys
 
 from .config import settings
+
+
+def _use_utf8_output() -> None:
+    """Stop a legacy Windows console from killing the process.
+
+    Python picks the console's own codepage for stdout, which on a Thai Windows
+    install is cp874 and cannot encode an arrow or an em dash.  Printing the
+    banner then raises UnicodeEncodeError and the server never starts.  Ask for
+    UTF-8 and fall back to replacement characters rather than an exception.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            try:
+                reconfigure(encoding="utf-8", errors="replace")
+            except (ValueError, OSError):        # pragma: no cover - odd hosts
+                pass
 
 
 def _configure_logging(verbose: bool) -> None:
@@ -45,6 +63,11 @@ async def _cli_sync(full: bool, deep: bool) -> None:
         print(f"unrealised  {totals['unrealised'][cur]:>18,.2f} "
               f"({totals['unrealised_pct'][cur]:+.2f}%)")
         print(f"realised    {totals['realised'][cur]:>18,.2f}")
+        excluded = totals.get("excluded", {}).get(cur, 0)
+        if excluded:
+            names = ", ".join(totals.get("unknown_assets", []))
+            print(f"no basis    {excluded:>18,.2f}  ({names} — excluded from PnL; "
+                  f"add them to {settings.holdings_file})")
         print(f"\n{'asset':<8}{'qty':>18}{'value':>18}{'unrealised':>18}")
         for p in snapshot["positions"][:25]:
             print(f"{p['asset']:<8}{p['qty']:>18,.8f}"
@@ -69,6 +92,7 @@ def main() -> None:
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
 
+    _use_utf8_output()
     _configure_logging(args.verbose)
 
     if not settings.has_credentials:

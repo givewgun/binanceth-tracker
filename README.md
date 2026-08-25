@@ -15,22 +15,64 @@ exchange is slow or you are offline.
 
 ## Quick start
 
+**macOS / Linux**
+
 ```bash
 git clone <this repo> && cd binanceth-tracker
 cp .env.example .env          # then paste your API key + secret into .env
 ./run.sh                      # creates a venv, installs deps, serves the app
 ```
 
+**Windows** — `run.sh` needs a POSIX shell, so use `run.cmd` (works from
+`cmd.exe`, PowerShell, or a double-click) or `run.ps1` directly:
+
+```powershell
+git clone <this repo>; cd binanceth-tracker
+copy .env.example .env        # then paste your API key + secret into .env
+.
+un.cmd                     # creates a venv, installs deps, serves the app
+```
+
 Open <http://127.0.0.1:8787>. The first load kicks off a sync automatically;
 pulling a few years of history takes a minute or two.
 
-Prefer to drive it from a terminal?
+Prefer to drive it from a terminal? Arguments pass straight through on every
+platform — swap `./run.sh` for `.
+un.cmd` on Windows.
 
 ```bash
 ./run.sh sync            # fetch new activity, print a summary
 ./run.sh sync --full     # re-fetch everything from scratch
 ./run.sh sync --deep     # also scan every listed pair for forgotten fills
 ```
+
+### Cost basis
+
+By default the tracker keeps one **average cost per asset** (`COST_BASIS_METHOD=simple`)
+and is explicit about what it does not know.
+
+Binance TH stops returning transfer history in April and never reports fiat
+movements at all, so a long-running account usually holds some quantity that no
+fill on record accounts for. Rather than cost that at today's price — which
+manufactures a profit of exactly zero and looks like a measurement — the
+tracker leaves it out of cost basis and PnL, and says so:
+
+```
+no basis                  2.37  (HBAR — excluded from PnL; add them to holdings.toml)
+```
+
+To value those coins, copy `holdings.example.toml` to `holdings.toml` and enter
+what you paid:
+
+```toml
+[HBAR]
+cost_thb = 45          # total paid for the unexplained quantity, not per coin
+```
+
+Anything you leave out still counts toward your balance and allocation — just
+not toward profit. `COST_BASIS_METHOD=fifo` restores the original lot-matching
+ledger engine, which is more precise when the exchange returns a complete
+history, and misleading when it does not.
 
 **Create the key with read-only permissions.** This app never places orders or
 moves funds, so "Enable Reading" is all it needs. Leave trading and withdrawals
