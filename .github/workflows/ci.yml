@@ -96,6 +96,12 @@ jobs:
             EOF
             sudo chmod 600 .env
 
-            sudo docker compose -f docker-compose.prod.yml --env-file .env up -d --build
-            sudo docker system prune -f
+            # Explicit project name: the VM's other apps (legion, horizon) also
+            # deploy from a directory literally named "app", so Compose's default
+            # project-name-from-dirname would merge this into their project and
+            # let either side's `up` reconcile away the other's containers.
+            sudo docker compose -p binanceth-tracker -f docker-compose.prod.yml --env-file .env up -d --build
+            # No `docker system prune -f` here: on a shared VM it deletes every
+            # OTHER stopped container on the box too, not just this app's leftovers.
+            sudo docker image prune -f
             echo "Deploy complete at $(date)"
