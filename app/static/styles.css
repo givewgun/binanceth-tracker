@@ -285,7 +285,37 @@ footer { padding: 0 22px 26px; font-size: 11px; color: var(--text-faint);
 
 @media (max-width: 640px) {
   main { padding: 14px 12px 30px; }
-  .topbar { padding: 12px 14px; }
+  .topbar { padding: 12px 14px; gap: 10px; }
+  .brand { width: 100%; }
   .kpi .value { font-size: 18px; }
   .kpi.big .value { font-size: 22px; }
+
+  /* pack the toolbar into a tidy 2-column grid instead of one control per row */
+  .topbar-actions {
+    width: 100%; display: grid;
+    grid-template-columns: 1fr 1fr; gap: 8px;
+  }
+  .ccy-toggle, .fx-chip, .btn { width: 100%; text-align: center; }
+  .ccy-toggle button { flex: 1; }
+
+  /* single-row scrollable tabs instead of wrapping across 3 lines */
+  .tabs {
+    flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch;
+    scrollbar-width: none; margin-left: -12px; margin-right: -12px;
+    padding: 0 12px;
+  }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tabs button { white-space: nowrap; flex: 0 0 auto; padding: 11px 12px; }
+
+  .grid-2 { grid-template-columns: 1fr; }
+  .card { padding: 13px; }
+  table { font-size: 12px; }
+  thead th, tbody td { padding: 8px 9px; }
+
+  /* keep the identifying first column visible while the rest of a wide table scrolls */
+  .table-scroll table th:first-child,
+  .table-scroll table td:first-child {
+    position: sticky; left: 0; z-index: 2; background: var(--bg-raised);
+  }
+  .table-scroll table thead th:first-child { z-index: 3; background: var(--bg-inset); }
 }
