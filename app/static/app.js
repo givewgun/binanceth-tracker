@@ -184,10 +184,17 @@ function renderKpis() {
 
   $('#kpi-cost').textContent = fmtMoney(pick(t.cost));
   const excluded = pick(t.excluded);
-  $('#kpi-fees').textContent = excluded
-    ? `${fmtMoney(excluded)} has no basis (${t.unknown_assets.join(', ')}) `
-      + `and is left out of PnL`
-    : `${fmtMoney(pick(t.fees))} paid in fees`;
+  $('#kpi-cost-hint').textContent = excluded
+    ? `excludes ${fmtMoney(excluded)} with no basis `
+      + `(${(t.unknown_assets || []).join(', ')})`
+    : 'what you paid for what you hold';
+
+  const fees = pick(t.fees);
+  $('#kpi-fees').textContent = fmtMoney(fees);
+  const equity = pick(t.equity);
+  $('#kpi-fees-hint').textContent = equity
+    ? `${fmtPct((fees / equity) * 100, { sign: false })} of portfolio value`
+    : 'commission on every fill';
 
   $('#fx-chip').textContent = t.fx_rate
     ? `1 USDT = ฿${fmt(t.fx_rate, { digits: 4 })}` : 'USDT rate unavailable';
