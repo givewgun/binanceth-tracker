@@ -1,0 +1,26 @@
+# Production compose for the shared Oracle Cloud VM (same box as gunvest/legion).
+# Self-contained: `docker compose -f docker-compose.prod.yml --env-file .env up -d --build`
+#
+# Joins the shared `tunnel-gateway` network so the existing cloudflared tunnel
+# (global-tunnel) can reach it by container name — add a Public Hostname rule
+# in the Cloudflare Zero Trust dashboard pointing at http://binanceth-app:8787.
+# No host port is published; the tunnel is the only ingress.
+
+services:
+  app:
+    build: .
+    container_name: binanceth-app
+    env_file: .env
+    volumes:
+      - binanceth-data:/app/data
+    expose:
+      - '8787'
+    restart: unless-stopped
+    networks: [tunnel-gateway]
+
+volumes:
+  binanceth-data:
+
+networks:
+  tunnel-gateway:
+    external: true

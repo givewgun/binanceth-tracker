@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: # manual run = verify -> docker -> deploy
+
+concurrency:
+  group: ci-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+      - name: Install deps
+        run: pip install -r requirements.txt
+      - name: Test
+        run: pytest
+
+  docker:
+    runs-on: ubuntu-latest
+    needs: [verify]
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t binanceth-tracker:latest .
+
+  # Manual only for now (mirrors legion's deploy gate): ship from
+  # Actions -> CI -> Run workflow once verify+docker are green.
+  deploy:
+    runs-on: ubuntu-latest
+    needs: [verify, docker]
+    if: github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: read
+    concurrency:
+      group: deploy-oracle-binanceth
+      cancel-in-progress: false
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1
+        env:
+          BINANCE_TH_API_KEY: ${{ secrets.BINANCE_TH_API_KEY }}
+          BINANCE_TH_API_SECRET: ${{ secrets.BINANCE_TH_API_SECRET }}
+          REPO_CLONE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        with:
+          host: ${{ secrets.ORACLE_VM_HOST }}
+          username: ubuntu
+          key: ${{ secrets.ORACLE_VM_SSH_KEY }}
+          port: 22
+          envs: BINANCE_TH_API_KEY,BINANCE_TH_API_SECRET,REPO_CLONE_TOKEN,GH_REPO
+          script: |
+            set -euo pipefail
+            APP_DIR=/opt/binanceth-tracker/app
+            REPO_URL="https://x-access-token:${REPO_CLONE_TOKEN}@github.com/${GH_REPO}.git"
+
+            # First-run bootstrap: clone if missing. The VM already has Docker
+            # and the shared tunnel-gateway network from the gunvest/legion deploy.
+            if [ ! -d "$APP_DIR/.git" ]; then
+              sudo rm -rf "$APP_DIR"
+              sudo mkdir -p "$(dirname "$APP_DIR")"
+              sudo git clone "$REPO_URL" "$APP_DIR"
+            fi
+
+            cd "$APP_DIR"
+            sudo git remote set-url origin "$REPO_URL"
+            sudo git fetch origin main
+            sudo git reset --hard origin/main
+
+            # Generate .env from GitHub Secrets (the source of truth) each deploy.
+            sudo tee .env > /dev/null <<EOF
+            BINANCE_TH_API_KEY=${BINANCE_TH_API_KEY}
+            BINANCE_TH_API_SECRET=${BINANCE_TH_API_SECRET}
+            BASE_CURRENCY=THB
+            COST_BASIS_METHOD=simple
+            FX_MODE=lots
+            TREAT_WITHDRAWAL_AS_SALE=false
+            DB_PATH=data/portfolio.db
+            PRICE_REFRESH_SECONDS=5
+            HOST=0.0.0.0
+            PORT=8787
+            EOF
+            sudo chmod 600 .env
+
+            sudo docker compose -f docker-compose.prod.yml --env-file .env up -d --build
+            sudo docker system prune -f
+            echo "Deploy complete at $(date)"
