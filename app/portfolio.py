@@ -705,12 +705,16 @@ async def _history_simple(store, oracle: PriceOracle, *,
     engine = SimpleCostBasis(oracle, fiat=fiat)
     opening = opening_quantities(trades, balances)
     pending_outflow: dict[str, Decimal] = {}
+    opening_fiat = ZERO
     for asset, qty in sorted(opening.items()):
         if asset == fiat:
-            # Coins predating the record were genuinely held from the start, so
-            # they are seeded. Baht is not: it is the funding rail, and seeding
-            # two years of unreported deposits on day one would draw a flat
-            # line at today's total and hide every baht that arrived since.
+            # Binance TH reports no fiat movement whatsoever, so there is no
+            # way to know when this baht arrived. It is credited at the start
+            # of the record: the curve then shows no growth from deposits, but
+            # it never understates what the account was actually holding.
+            if qty > 0:
+                opening_fiat = qty
+                engine.book(fiat).add(qty, Money(qty, ZERO))
             continue
         if qty > 0:
             engine.open_position(asset, qty, manual.get(asset))
@@ -731,6 +735,10 @@ async def _history_simple(store, oracle: PriceOracle, *,
     realised = Money()
     deposits = Money()
     withdrawals = Money()
+    if opening_fiat > 0:
+        fx0 = _cached_fx(store, start_day * DAY_MS) or oracle.usdt_thb()
+        deposits = deposits + Money(opening_fiat,
+                                    opening_fiat / fx0 if fx0 else ZERO)
     out: list[dict] = []
 
     for day in range(start_day, end_day + 1):

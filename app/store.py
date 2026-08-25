@@ -405,6 +405,12 @@ class Store:
 
     # -- stats ------------------------------------------------------------
 
+    def clear_equity_history(self) -> None:
+        """Drop the cached daily curve so it is rebuilt from current data."""
+        with self._lock:
+            self._db.execute("DELETE FROM equity_history")
+            self._db.commit()
+
     def counts(self) -> dict:
         with self._lock:
             def one(sql: str) -> int:

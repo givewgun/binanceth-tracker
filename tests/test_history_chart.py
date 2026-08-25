@@ -113,3 +113,39 @@ def test_curve_ends_on_the_real_balance(tmp_path, monkeypatch):
     # 100 USDT at 31 baht (not the 500 the fills imply), plus 46,500 baht of
     # sale proceeds sitting in the account
     assert D(rows[-1]["equity_thb"]) == D("49600")
+
+
+def test_a_stale_cached_curve_is_rebuilt(tmp_path, monkeypatch):
+    """Freshness once meant 'last row is dated today', so a curve computed
+    wrongly was served for good. It must be keyed to its inputs instead."""
+    from app.models import Money
+    from app.service import PortfolioService
+
+    store, oracle = _seed(tmp_path, monkeypatch)
+    zero = Money(D(0), D(0))
+    for day, ts in (("2026-08-24", 1), ("2026-08-25", 2)):
+        store.upsert_equity(day, ts, zero, zero, zero, D(0), {})
+    store.set_meta("equity_history_sig", "built-by-older-code")
+
+    service = PortfolioService.__new__(PortfolioService)
+    service.store, service.oracle = store, oracle
+
+    rows = asyncio.run(service.history_rows())
+
+    assert len(rows) > 2, "the poisoned two-row cache was served"
+    assert any(r["equity"]["thb"] for r in rows), "every row still reads zero"
+    assert store.get_meta("equity_history_sig") == service._history_signature()
+
+
+def test_a_matching_cache_is_reused(tmp_path, monkeypatch):
+    from app.service import PortfolioService
+
+    store, oracle = _seed(tmp_path, monkeypatch)
+    service = PortfolioService.__new__(PortfolioService)
+    service.store, service.oracle = store, oracle
+
+    first = asyncio.run(service.history_rows())
+    store.upsert_trades([])                      # nothing changed
+    second = asyncio.run(service.history_rows())
+
+    assert [r["day"] for r in first] == [r["day"] for r in second]

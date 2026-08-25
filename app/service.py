@@ -279,12 +279,38 @@ class PortfolioService:
         rows.sort(key=lambda r: r["time"], reverse=True)
         return rows[:limit]
 
+    #: Bumped whenever the curve's arithmetic changes, so a cache built by
+    #: older code is rebuilt rather than served forever.
+    HISTORY_VERSION = 2
+
+    def _history_signature(self) -> str:
+        """What the cached curve was built from."""
+        counts = self.store.counts()
+        return "|".join(str(x) for x in (
+            self.HISTORY_VERSION,
+            settings.cost_basis_method,
+            settings.fx_mode,
+            counts["trades"], counts["deposits"], counts["withdrawals"],
+            counts["last_trade"],
+            self.store.get_meta_int("last_sync", 0),
+        ))
+
     async def history_rows(self, refresh: bool = False) -> list[dict]:
+        """The daily curve, rebuilt whenever its inputs have moved.
+
+        Freshness was previously judged by the date of the last cached row, so
+        a curve computed once — however wrongly — was served for the rest of
+        the day and every day after. A run that stored 641 zeroes therefore
+        survived every fix to the code that produced them.
+        """
+        signature = self._history_signature()
         cached = self.store.equity_history()
-        today = time.strftime("%Y-%m-%d", time.gmtime())
-        if cached and not refresh and cached[-1]["day"] >= today:
+        if (cached and not refresh
+                and self.store.get_meta("equity_history_sig") == signature):
             return [self._history_row(r) for r in cached]
+
         rows = await build_history(self.store, self.oracle)
+        self.store.set_meta("equity_history_sig", signature)
         return [self._history_row(r) for r in rows]
 
     @staticmethod
