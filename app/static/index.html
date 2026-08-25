@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Binance TH Portfolio</title>
+<link rel="stylesheet" href="/static/styles.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>📊</text></svg>">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="mark">₿</span>
+    <div>
+      <h1>Binance TH Portfolio</h1>
+      <p class="sub" id="conn-line">connecting…</p>
+    </div>
+  </div>
+
+  <div class="topbar-actions">
+    <div class="ccy-toggle" role="group" aria-label="Reporting currency">
+      <button data-ccy="thb" class="active">THB</button>
+      <button data-ccy="usdt">USDT</button>
+    </div>
+    <div class="fx-chip" id="fx-chip" title="Live USDT/THB rate">—</div>
+    <button id="btn-sync" class="btn primary">Sync</button>
+    <button id="btn-sync-full" class="btn ghost" title="Re-fetch the entire history from scratch">Full&nbsp;resync</button>
+  </div>
+</header>
+
+<div id="sync-bar" class="sync-bar hidden">
+  <div class="sync-fill" id="sync-fill"></div>
+  <span id="sync-text"></span>
+</div>
+
+<div id="banner" class="banner hidden"></div>
+
+<main>
+  <!-- ── headline numbers ─────────────────────────────────────────── -->
+  <section class="kpis" id="kpis">
+    <div class="kpi big">
+      <span class="label">Portfolio value</span>
+      <span class="value" id="kpi-equity">—</span>
+      <span class="hint" id="kpi-equity-alt"></span>
+    </div>
+    <div class="kpi">
+      <span class="label">Unrealised P&amp;L</span>
+      <span class="value" id="kpi-unrealised">—</span>
+      <span class="hint" id="kpi-unrealised-pct"></span>
+    </div>
+    <div class="kpi">
+      <span class="label">Realised P&amp;L</span>
+      <span class="value" id="kpi-realised">—</span>
+      <span class="hint">closed positions, after fees</span>
+    </div>
+    <div class="kpi">
+      <span class="label">Total return</span>
+      <span class="value" id="kpi-total">—</span>
+      <span class="hint" id="kpi-total-hint">vs. net deposited</span>
+    </div>
+    <div class="kpi">
+      <span class="label">Cost basis</span>
+      <span class="value neutral" id="kpi-cost">—</span>
+      <span class="hint" id="kpi-fees"></span>
+    </div>
+  </section>
+
+  <!-- ── tabs ─────────────────────────────────────────────────────── -->
+  <nav class="tabs" id="tabs">
+    <button data-tab="overview" class="active">Overview</button>
+    <button data-tab="holdings">Holdings</button>
+    <button data-tab="trades">Trades</button>
+    <button data-tab="transfers">Deposits &amp; withdrawals</button>
+    <button data-tab="realised">Realised P&amp;L</button>
+    <button data-tab="history">History</button>
+  </nav>
+
+  <!-- ── overview ─────────────────────────────────────────────────── -->
+  <section class="tab-panel active" id="tab-overview">
+    <div class="grid-2">
+      <div class="card">
+        <div class="card-head">
+          <h2>Equity over time</h2>
+          <div class="seg" id="hist-range">
+            <button data-days="30">30d</button>
+            <button data-days="90" class="active">90d</button>
+            <button data-days="365">1y</button>
+            <button data-days="0">All</button>
+          </div>
+        </div>
+        <canvas id="chart-equity" height="260"></canvas>
+        <div class="legend">
+          <span><i class="sw equity"></i>Portfolio value</span>
+          <span><i class="sw cost"></i>Cost basis</span>
+          <span><i class="sw net"></i>Net deposited</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h2>Allocation</h2></div>
+        <div class="alloc-wrap">
+          <canvas id="chart-alloc" width="220" height="220"></canvas>
+          <ul class="alloc-list" id="alloc-list"></ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid-2">
+      <div class="card">
+        <div class="card-head"><h2>How you funded each position</h2></div>
+        <p class="card-note">
+          Coins bought with baht and coins bought with tether, valued in your
+          reporting currency. This is the split the cost-basis engine reconciles.
+        </p>
+        <canvas id="chart-funding" height="200"></canvas>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>Recent activity</h2></div>
+        <div class="table-scroll compact"><table id="tbl-recent"><tbody></tbody></table></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── holdings ─────────────────────────────────────────────────── -->
+  <section class="tab-panel" id="tab-holdings">
+    <div class="card">
+      <div class="card-head">
+        <h2>Holdings</h2>
+        <label class="chk"><input type="checkbox" id="hide-dust"> Hide dust</label>
+      </div>
+      <div class="table-scroll">
+        <table id="tbl-holdings">
+          <thead><tr>
+            <th>Asset</th><th class="r">Quantity</th><th class="r">Avg cost</th>
+            <th class="r">Price</th><th class="r">Cost basis</th><th class="r">Value</th>
+            <th class="r">Unrealised</th><th class="r">ROI</th>
+            <th class="r">Realised</th><th class="r">Weight</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── trades ───────────────────────────────────────────────────── -->
+  <section class="tab-panel" id="tab-trades">
+    <div class="card">
+      <div class="card-head">
+        <h2>Trades</h2>
+        <div class="filters">
+          <input id="f-trade-asset" placeholder="Filter asset (e.g. BTC)">
+          <select id="f-trade-side">
+            <option value="">Buy &amp; sell</option>
+            <option value="BUY">Buys</option>
+            <option value="SELL">Sells</option>
+          </select>
+          <select id="f-trade-quote">
+            <option value="">All quotes</option>
+            <option value="THB">THB-quoted</option>
+            <option value="USDT">USDT-quoted</option>
+          </select>
+        </div>
+      </div>
+      <div class="table-scroll">
+        <table id="tbl-trades">
+          <thead><tr>
+            <th>Time</th><th>Pair</th><th>Side</th><th class="r">Price</th>
+            <th class="r">Quantity</th><th class="r">Traded for</th>
+            <th class="r">Value</th><th class="r">Fee</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="table-foot" id="trades-foot"></div>
+    </div>
+  </section>
+
+  <!-- ── transfers ────────────────────────────────────────────────── -->
+  <section class="tab-panel" id="tab-transfers">
+    <div class="grid-2 tight">
+      <div class="card mini"><span class="label">Total deposited</span>
+        <span class="value" id="sum-deposits">—</span></div>
+      <div class="card mini"><span class="label">Total withdrawn</span>
+        <span class="value" id="sum-withdrawals">—</span></div>
+    </div>
+    <div class="card">
+      <div class="card-head">
+        <h2>Deposits &amp; withdrawals</h2>
+        <div class="filters">
+          <select id="f-transfer-kind">
+            <option value="">All movements</option>
+            <option value="DEPOSIT">Deposits</option>
+            <option value="WITHDRAWAL">Withdrawals</option>
+          </select>
+          <input id="f-transfer-asset" placeholder="Filter asset">
+        </div>
+      </div>
+      <div class="table-scroll">
+        <table id="tbl-transfers">
+          <thead><tr>
+            <th>Time</th><th>Type</th><th>Asset</th><th class="r">Amount</th>
+            <th class="r">Fee</th><th class="r">Value today</th>
+            <th>Status</th><th>Network / reference</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── realised ─────────────────────────────────────────────────── -->
+  <section class="tab-panel" id="tab-realised">
+    <div class="card">
+      <div class="card-head">
+        <h2>Realised P&amp;L</h2>
+        <p class="card-note inline" id="realised-note"></p>
+      </div>
+      <div class="table-scroll">
+        <table id="tbl-realised">
+          <thead><tr>
+            <th>Closed</th><th>Asset</th><th class="r">Quantity</th>
+            <th class="r">Cost</th><th class="r">Proceeds</th><th class="r">P&amp;L</th>
+            <th class="r">ROI</th><th class="r">Held</th><th>Type</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── history ──────────────────────────────────────────────────── -->
+  <section class="tab-panel" id="tab-history">
+    <div class="card">
+      <div class="card-head">
+        <h2>Daily history</h2>
+        <button id="btn-rebuild-history" class="btn ghost">Rebuild</button>
+      </div>
+      <canvas id="chart-pnl" height="240"></canvas>
+      <div class="legend">
+        <span><i class="sw equity"></i>Unrealised P&amp;L</span>
+        <span><i class="sw realised"></i>Realised P&amp;L (cumulative)</span>
+      </div>
+      <div class="table-scroll">
+        <table id="tbl-history">
+          <thead><tr>
+            <th>Day</th><th class="r">Value</th><th class="r">Cost basis</th>
+            <th class="r">Unrealised</th><th class="r">Realised</th>
+            <th class="r">Net deposited</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <span id="foot-meta"></span>
+</footer>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
