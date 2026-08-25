@@ -479,6 +479,7 @@ async def _build_simple(store, oracle: PriceOracle) -> PortfolioState:
         balances=store.balances(),
         oracle=oracle,
         holdings=holdings,
+        transfers=store.transfers(),
         fiat=settings.fiat,
     )
 
@@ -668,6 +669,180 @@ def _cached_price_pair(store, oracle: PriceOracle, asset: str, ts: int) -> Money
 
 
 async def build_history(store, oracle: PriceOracle, *,
+                        method: Optional[str] = None,
+                        fx_mode: Optional[str] = None,
+                        persist: bool = True) -> list[dict]:
+    """Daily equity / cost / realised-PnL curve.
+
+    Uses whichever engine values the live snapshot; a chart drawn by different
+    accounting than the headline numbers is worse than no chart.
+    """
+    if (method or settings.cost_basis_method) == "simple":
+        return await _history_simple(store, oracle, persist=persist)
+    return await _history_fifo(store, oracle, method=method, fx_mode=fx_mode,
+                               persist=persist)
+
+
+async def _history_simple(store, oracle: PriceOracle, *,
+                          persist: bool = True) -> list[dict]:
+    """Daily curve under average-cost accounting."""
+    import time as _time
+
+    from .costbasis_simple import SimpleCostBasis, opening_quantities
+    from .holdings import HoldingsError, load_holdings
+
+    trades = sorted(store.trades(), key=lambda t: (t.time, str(t.trade_id)))
+    balances = store.balances()
+    if not trades and not balances:
+        return []
+
+    try:
+        manual = load_holdings(settings.holdings_path)
+    except HoldingsError:
+        manual = {}                      # the snapshot reports this properly
+
+    fiat = settings.fiat
+    engine = SimpleCostBasis(oracle, fiat=fiat)
+    opening = opening_quantities(trades, balances)
+    pending_outflow: dict[str, Decimal] = {}
+    for asset, qty in sorted(opening.items()):
+        if asset == fiat:
+            # Coins predating the record were genuinely held from the start, so
+            # they are seeded. Baht is not: it is the funding rail, and seeding
+            # two years of unreported deposits on day one would draw a flat
+            # line at today's total and hide every baht that arrived since.
+            continue
+        if qty > 0:
+            engine.open_position(asset, qty, manual.get(asset))
+        elif qty < 0:
+            # Holdings short of what the fills imply: coins left by a route the
+            # API never reported. We cannot know when, so we take them at the
+            # first moment the book can cover them — which keeps every later
+            # point, and the final one especially, matching the real balance.
+            pending_outflow[asset] = -qty
+
+    transfers = sorted(store.transfers(), key=lambda t: t.time)
+    first = min([t.time for t in trades] + [t.time for t in transfers if t.time]
+                or [int(_time.time() * 1000)])
+    start_day = first // DAY_MS
+    end_day = int(_time.time() * 1000) // DAY_MS
+
+    idx = tidx = seen = 0
+    realised = Money()
+    deposits = Money()
+    withdrawals = Money()
+    out: list[dict] = []
+
+    for day in range(start_day, end_day + 1):
+        day_end = (day + 1) * DAY_MS - 1
+        while idx < len(trades) and trades[idx].time <= day_end:
+            trade = trades[idx]
+            deposits = deposits + _fund_fiat(engine, trade, fiat, store, day_end)
+            await engine.apply_trade(trade)
+            idx += 1
+        if idx >= len(trades):
+            # Only once every fill is in. Draining earlier would empty the book
+            # under a later sale, whose cost would then be clamped and its
+            # proceeds booked almost entirely as profit.
+            _settle_outflows(engine, pending_outflow)
+        while tidx < len(transfers) and transfers[tidx].time <= day_end:
+            tr = transfers[tidx]
+            price = _cached_price_pair(store, oracle, tr.asset, tr.time)
+            value = Money(price.thb * tr.amount, price.usdt * tr.amount)
+            if tr.kind == "DEPOSIT":
+                deposits = deposits + value
+            else:
+                withdrawals = withdrawals + value
+            tidx += 1
+
+        for d in engine.disposals[seen:]:
+            if d.counts_as_realised:
+                realised = realised + d.pnl
+        seen = len(engine.disposals)
+
+        equity = Money()
+        cost = Money()
+        holdings: dict[str, str] = {}
+        for asset, book in engine.books.items():
+            qty = book.qty
+            if qty <= DUST:
+                continue
+            if asset == fiat:
+                fx = _cached_fx(store, day_end)
+                price = Money(D(1), D(1) / fx if fx else ZERO)
+            else:
+                price = _cached_price_pair(store, oracle, asset, day_end)
+            equity = equity + Money(price.thb * qty, price.usdt * qty)
+            cost = cost + book.cost
+            holdings[asset] = str(qty)
+
+        key = day_key(day_end)
+        net_deposit = deposits - withdrawals
+        out.append({
+            "day": key,
+            "ts": day_end,
+            "equity_thb": str(equity.thb), "equity_usdt": str(equity.usdt),
+            "cost_thb": str(cost.thb), "cost_usdt": str(cost.usdt),
+            "realised_thb": str(realised.thb), "realised_usdt": str(realised.usdt),
+            "net_deposit_thb": str(net_deposit.thb),
+            "net_deposit_usdt": str(net_deposit.usdt),
+            "unrealised_thb": str(equity.thb - cost.thb),
+            "unrealised_usdt": str(equity.usdt - cost.usdt),
+        })
+        if persist:
+            store.upsert_equity(key, day_end, equity, cost, realised,
+                                net_deposit.thb, {"holdings": holdings})
+    return out
+
+
+def _settle_outflows(engine, pending: dict) -> None:
+    """Drain quantity that left by a route the API never reported.
+
+    Taken at cost, so no profit is booked on coins we cannot see the fate of.
+    Call this only after the whole record is replayed: the API does not say
+    when the coins went, and removing them early would leave a later sale
+    short of basis, inflating realised PnL by most of the sale.
+    """
+    for asset in list(pending):
+        book = engine.book(asset)
+        take = min(pending[asset], book.qty)
+        if take <= 0:
+            continue
+        from_unknown = min(take, book.unknown_qty)
+        book.unknown_qty -= from_unknown
+        book.remove_costed(take - from_unknown)
+        pending[asset] -= take
+        if pending[asset] <= 0:
+            del pending[asset]
+
+
+def _fund_fiat(engine, trade: Trade, fiat: str, store, ts: int) -> Money:
+    """Top the baht balance up to cover a purchase, and call it a deposit.
+
+    Binance TH reports no fiat movements at all, so the baht spent across the
+    record has to have arrived somehow. Crediting it at the moment it is spent
+    keeps the equity curve honest — capital appears as it is deployed — and
+    gives the net-deposited line something real to plot.
+    """
+    needed = ZERO
+    if trade.side == "BUY" and trade.quote_asset == fiat:
+        needed += trade.quote_qty
+    if trade.fee > 0 and trade.fee_asset == fiat:
+        needed += trade.fee
+    if needed <= 0:
+        return Money()
+
+    book = engine.book(fiat)
+    short = needed - book.qty
+    if short <= 0:
+        return Money()
+
+    book.add(short, Money(short, ZERO))
+    fx = _cached_fx(store, ts)
+    return Money(short, short / fx if fx else ZERO)
+
+
+async def _history_fifo(store, oracle: PriceOracle, *,
                         method: Optional[str] = None,
                         fx_mode: Optional[str] = None,
                         persist: bool = True) -> list[dict]:

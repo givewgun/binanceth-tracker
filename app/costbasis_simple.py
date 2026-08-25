@@ -261,6 +261,7 @@ async def build_simple_state(*, trades: Iterable[Trade],
                              balances: Iterable[Balance],
                              oracle: PriceOracle,
                              holdings: Optional[dict[str, HoldingCost]] = None,
+                             transfers: Optional[Iterable] = None,
                              fiat: str = "THB"):
     """Average-cost portfolio state from fills, balances and manual costs."""
     from .portfolio import PortfolioState
@@ -322,6 +323,26 @@ async def build_simple_state(*, trades: Iterable[Trade],
             state.positions[asset].realised = pnl
 
     state.cash = state.positions[fiat].qty if fiat in state.positions else ZERO
+
+    # Reported transfers, plus the baht the venue never reports at all: the
+    # account cannot have spent more fiat than it held without funding from
+    # somewhere, and leaving that out makes "net deposited" — and every total
+    # return computed against it — meaningless.
+    fx = oracle.usdt_thb() or ZERO
+    for transfer in transfers or ():
+        # Valued when it happened: a 2024 deposit is worth its 2024 baht, not
+        # what the same coins would fetch today.
+        value = await oracle.historical_value(transfer.asset, transfer.amount,
+                                              transfer.time)
+        if transfer.kind == "DEPOSIT":
+            state.deposits_value = state.deposits_value + value
+        else:
+            state.withdrawals_value = state.withdrawals_value + value
+    unreported = opening.get(fiat, ZERO)
+    if unreported > 0:
+        state.deposits_value = state.deposits_value + Money(
+            unreported, unreported / fx if fx else ZERO)
+
     return state
 
 

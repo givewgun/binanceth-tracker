@@ -184,24 +184,36 @@ class PriceOracle:
 
     async def ensure_candles(self, symbol: str, interval: str,
                              start: int, end: int) -> int:
-        """Backfill and cache closes for ``symbol`` over a time range."""
+        """Backfill and cache closes for ``symbol`` over a time range.
+
+        Deliberately sends ``startTime`` without ``endTime``.  Binance TH caps
+        a *bounded* kline query at a 7-day span and answers -4088 above it,
+        which for daily candles would mean one request per week of history; an
+        open-ended query is not capped and returns a full page from the cursor
+        forward.  Anything past ``end`` is simply dropped on our side.
+        """
         step = HOUR_MS if interval == "1h" else DAY_MS if interval == "1d" else HOUR_MS
         cursor, stored, guard = start, 0, 0
         while cursor < end and guard < 200:
             guard += 1
             try:
                 candles = await self.client.klines(
-                    symbol, interval, start=cursor, end=end, limit=500
+                    symbol, interval, start=cursor, end=None, limit=500
                 )
             except BinanceTHError as exc:
-                log.debug("kline backfill stopped for %s: %s", symbol, exc)
+                # Loud, not debug: an empty candle cache silently flatlines the
+                # whole equity chart, which is how this went unnoticed.
+                log.warning("kline backfill failed for %s (%s): %s",
+                            symbol, interval, exc)
                 break
             if not candles:
                 break
-            self.store.upsert_candles(symbol, interval, [(c[0], c[4]) for c in candles])
-            stored += len(candles)
+            wanted = [(c[0], c[4]) for c in candles if c[0] <= end]
+            if wanted:
+                self.store.upsert_candles(symbol, interval, wanted)
+                stored += len(wanted)
             newest = candles[-1][0]
-            if newest <= cursor:
+            if newest >= end or newest <= cursor:
                 break
             cursor = newest + step
         return stored
