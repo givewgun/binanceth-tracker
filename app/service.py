@@ -173,8 +173,12 @@ class PortfolioService:
                           - state.deposits_value.thb,
                           equity.usdt + state.withdrawals_value.usdt
                           - state.deposits_value.usdt)
+        btc_price = self.oracle.route("BTC", "USDT").value
+        equity_btc = equity.usdt / btc_price if btc_price else None
         return {
             "equity": money(equity),
+            "equity_btc": num(equity_btc),
+            "btc_price": num(btc_price),
             "cost": money(cost),
             "excluded": money(state.excluded_value),
             "unknown_assets": state.unknown_assets,

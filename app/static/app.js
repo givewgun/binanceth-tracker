@@ -162,6 +162,8 @@ function renderKpis() {
   $('#kpi-equity').textContent = fmtMoney(pick(t.equity));
   $('#kpi-equity-alt').textContent =
     `${CCY_SIGN[other]}${fmt(t.equity[other])} ${CCY_LABEL[other]}`;
+  $('#kpi-equity-btc').textContent = t.equity_btc
+    ? `₿ ${fmt(t.equity_btc, { digits: 6 })} BTC` : '';
 
   const unrealised = pick(t.unrealised);
   const un = $('#kpi-unrealised');
