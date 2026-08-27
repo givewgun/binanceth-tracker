@@ -150,6 +150,8 @@ main { padding: 18px 22px 40px; max-width: 1580px; margin: 0 auto; }
 .kpi .value { font: 600 21px/1.25 var(--mono); letter-spacing: -0.02em; }
 .kpi.big .value { font-size: 27px; }
 .kpi .hint { font-size: 11.5px; color: var(--text-dim); font-family: var(--mono); }
+.kpi .label.hintable { cursor: help; }
+.kpi .info-mark { color: var(--text-faint); font-weight: 400; }
 
 .up { color: var(--up); }
 .down { color: var(--down); }
