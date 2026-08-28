@@ -275,7 +275,15 @@ def apply_transfer(engine: "SimpleCostBasis", tr, value: Money, fiat: str) -> No
     transfer's own timestamp says it really happened.
     """
     if tr.asset.upper() == fiat.upper():
-        return                            # cash is cash; carries no basis
+        # Only manually logged entries ever reach here — Binance TH's API
+        # never reports a fiat transfer at all. Cash carries no basis, so
+        # there's no cost-basis bookkeeping to do, just move the balance.
+        book = engine.book(tr.asset)
+        if tr.kind == "DEPOSIT":
+            book.add(tr.amount, value)
+        else:
+            book.remove_costed(tr.amount)   # self-clamps to what's on hand
+        return
     book = engine.book(tr.asset)
     if tr.kind == "DEPOSIT":
         book.add(tr.amount, value)

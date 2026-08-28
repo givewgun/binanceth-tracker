@@ -6,6 +6,7 @@ const state = {
   portfolio: null,
   trades: null,
   transfers: null,
+  fiatTransfers: null,
   realised: null,
   history: null,
   histDays: 90,
@@ -109,14 +110,19 @@ function el(tag, className, text) {
 
 /* ── data loading ────────────────────────────────────────────────── */
 
-async function api(path) {
-  const response = await fetch(path);
+async function api(path, options = {}) {
+  const init = options.method ? {
+    method: options.method,
+    headers: { 'Content-Type': 'application/json' },
+    body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+  } : undefined;
+  const response = await fetch(path, init);
   if (!response.ok) {
     let message = `${response.status} ${response.statusText}`;
     try { message = (await response.json()).error || message; } catch (_) {}
     throw new Error(message);
   }
-  return response.json();
+  return response.status === 204 ? null : response.json();
 }
 
 async function loadPortfolio(force = false) {
@@ -138,6 +144,11 @@ async function loadTrades() {
 async function loadTransfers() {
   state.transfers = await api('/api/transfers');
   renderTransfers();
+}
+
+async function loadFiatTransfers() {
+  state.fiatTransfers = await api('/api/fiat-transfers');
+  renderFiatTransfers();
 }
 
 async function loadRealised() {
@@ -459,6 +470,63 @@ function renderTransfers() {
     row.appendChild(ref);
     body.appendChild(row);
   }
+}
+
+/* ── manual THB transfers ────────────────────────────────────────── */
+
+function renderFiatTransfers() {
+  const body = $('#tbl-fiat-transfers tbody');
+  body.innerHTML = '';
+  const rows = state.fiatTransfers?.rows || [];
+
+  if (!rows.length) {
+    body.appendChild(emptyRow(5, 'No manual THB entries yet.'));
+    return;
+  }
+
+  for (const t of rows) {
+    const row = el('tr');
+    row.appendChild(el('td', null, fmtDate(t.time)));
+    const kindCell = el('td');
+    kindCell.appendChild(el('span', 'pill ' + (t.kind === 'DEPOSIT' ? 'dep' : 'wd'),
+                            t.kind === 'DEPOSIT' ? 'Deposit' : 'Withdrawal'));
+    row.appendChild(kindCell);
+    row.appendChild(cell('฿' + fmt(t.amount)));
+    row.appendChild(el('td', null, t.note || '—'));
+
+    const actions = el('td');
+    const del = el('button', 'btn ghost', 'Delete');
+    del.addEventListener('click', () => deleteFiatTransfer(t.id));
+    actions.appendChild(del);
+    row.appendChild(actions);
+
+    body.appendChild(row);
+  }
+}
+
+async function submitFiatTransfer(e) {
+  e.preventDefault();
+  const dateVal = $('#ft-date').value;
+  const amount = $('#ft-amount').value;
+  if (!dateVal || !amount) return;
+
+  await api('/api/fiat-transfers', { method: 'POST', body: {
+    kind: $('#ft-kind').value,
+    amount,
+    time: new Date(dateVal + 'T00:00:00Z').getTime(),
+    note: $('#ft-note').value.trim(),
+  } });
+
+  $('#form-fiat-transfer').reset();
+  await Promise.allSettled([loadFiatTransfers(), loadHistory(true), loadPortfolio(true)]);
+  redrawCharts();
+}
+
+async function deleteFiatTransfer(id) {
+  if (!confirm('Delete this entry?')) return;
+  await api(`/api/fiat-transfers/${id}`, { method: 'DELETE' });
+  await Promise.allSettled([loadFiatTransfers(), loadHistory(true), loadPortfolio(true)]);
+  redrawCharts();
 }
 
 /* ── realised P&L ────────────────────────────────────────────────── */
@@ -886,7 +954,7 @@ async function pollSync() {
 
 async function refreshAll(force = false) {
   await Promise.allSettled([
-    loadPortfolio(force), loadTrades(), loadTransfers(),
+    loadPortfolio(force), loadTrades(), loadTransfers(), loadFiatTransfers(),
     loadRealised(), loadHistory(force),
   ]);
   redrawCharts();
@@ -934,6 +1002,7 @@ function init() {
     $(sel).addEventListener('input', renderTrades));
   ['#f-transfer-kind', '#f-transfer-asset'].forEach((sel) =>
     $(sel).addEventListener('input', renderTransfers));
+  $('#form-fiat-transfer').addEventListener('submit', submitFiatTransfer);
 
   $$('#hist-range button').forEach((b) =>
     b.addEventListener('click', () => {

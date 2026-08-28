@@ -201,6 +201,40 @@ def test_withdrawal_lands_on_its_own_day_not_the_last_one(tmp_path, monkeypatch)
         "the curve must not carry a phantom second drop on its final day"
 
 
+def test_manual_thb_transfer_dates_the_curve(tmp_path, monkeypatch):
+    """Binance TH's API never reports a THB deposit or withdrawal at all, so
+    without a manually logged entry the whole balance gets dumped onto day
+    one. A logged entry must move the curve on its own date instead — this is
+    the only way "I deposited last week, and withdrew everything before that"
+    can ever show up correctly."""
+    from app.config import settings
+    from app.models import Balance, Transfer
+    from app.portfolio import build_history, day_key
+    from app.store import Store
+    from tests.conftest import FakeOracle
+
+    day = 86_400_000
+    t0 = 1_700_000_000_000
+
+    store = Store(tmp_path / "h3.db")
+    store.add_manual_transfer("DEPOSIT", "THB", D("100000"), t0, "bank transfer in")
+    store.add_manual_transfer("WITHDRAWAL", "THB", D("100000"), t0 + day, "moved back out")
+    store.upsert_balances([Balance(asset="THB", free=D("0"), locked=D(0))])
+    monkeypatch.setattr(settings, "cost_basis_method", "simple")
+    monkeypatch.setattr(settings, "holdings_file", str(tmp_path / "absent.toml"))
+
+    oracle = FakeOracle(spot={"USDTTHB": "34"})
+    rows = asyncio.run(build_history(store, oracle, persist=False))
+    by_day = {r["day"]: r for r in rows}
+
+    funded = by_day[day_key(t0)]
+    after_withdrawal = by_day[day_key(t0 + day)]
+
+    assert D(funded["equity_thb"]) == D("100000"), "the deposit lands on its own day"
+    assert D(after_withdrawal["equity_thb"]) == D("0"), \
+        "fully withdrawn the day after — not still sitting there, not credited to day one"
+
+
 def test_a_matching_cache_is_reused(tmp_path, monkeypatch):
     from app.service import PortfolioService
 

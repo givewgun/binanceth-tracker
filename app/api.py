@@ -10,9 +10,18 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 from .config import settings
+from .models import D
 from .service import money, num, service
+
+
+class FiatTransferIn(BaseModel):
+    kind: str
+    amount: str
+    time: int
+    note: str = ""
 
 log = logging.getLogger("binanceth.api")
 STATIC = Path(__file__).parent / "static"
@@ -153,6 +162,44 @@ async def transfers(kind: str = Query(""), asset: str = Query(""),
             "value_now": value_now,
         })
     return {"total": len(rows), "rows": out}
+
+
+@app.get("/api/fiat-transfers")
+async def fiat_transfers():
+    """Deposits and withdrawals logged by hand — Binance TH's API reports
+    none of these at all, so this is the only record of them."""
+    rows = sorted(service.store.manual_transfers(), key=lambda t: t.time, reverse=True)
+    fx = service.oracle.usdt_thb()
+    return {"rows": [{
+        "id": t.transfer_id, "kind": t.kind, "amount": num(t.amount),
+        "amount_exact": str(t.amount), "time": t.time, "note": t.note,
+        "value_now": {"thb": num(t.amount), "usdt": num(t.amount / fx) if fx else 0.0},
+    } for t in rows]}
+
+
+@app.post("/api/fiat-transfers")
+async def add_fiat_transfer(body: FiatTransferIn):
+    kind = body.kind.upper()
+    if kind not in ("DEPOSIT", "WITHDRAWAL"):
+        raise HTTPException(400, "kind must be DEPOSIT or WITHDRAWAL")
+    try:
+        amount = D(body.amount)
+    except Exception:
+        raise HTTPException(400, "invalid amount")
+    if amount <= 0:
+        raise HTTPException(400, "amount must be positive")
+    row_id = service.store.add_manual_transfer(
+        kind, settings.fiat, amount, body.time, body.note[:280])
+    service.invalidate()
+    return {"id": row_id}
+
+
+@app.delete("/api/fiat-transfers/{transfer_id}")
+async def delete_fiat_transfer(transfer_id: int):
+    if not service.store.delete_manual_transfer(transfer_id):
+        raise HTTPException(404, "not found")
+    service.invalidate()
+    return {"deleted": True}
 
 
 @app.get("/api/realised")

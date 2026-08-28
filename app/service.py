@@ -314,7 +314,7 @@ class PortfolioService:
 
     #: Bumped whenever the curve's arithmetic changes, so a cache built by
     #: older code is rebuilt rather than served forever.
-    HISTORY_VERSION = 3
+    HISTORY_VERSION = 4
 
     def _history_signature(self) -> str:
         """What the cached curve was built from."""
@@ -324,7 +324,7 @@ class PortfolioService:
             settings.cost_basis_method,
             settings.fx_mode,
             counts["trades"], counts["deposits"], counts["withdrawals"],
-            counts["last_trade"],
+            counts["manual_transfers"], counts["last_trade"],
             self.store.get_meta_int("last_sync", 0),
         ))
 

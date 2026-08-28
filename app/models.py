@@ -74,6 +74,7 @@ class Transfer:
     network: str = ""
     address: str = ""
     is_fiat: bool = False
+    note: str = ""
 
     @property
     def net_amount(self) -> Decimal:

@@ -166,5 +166,30 @@ async def test_http_api_serves_the_dashboard(app_env, monkeypatch, server):
         assert http.get("/api/status").status_code == 200
         assert http.get("/").status_code == 200
 
+        # Fiat transfers: the one thing Binance TH's own API never reports.
+        assert http.get("/api/fiat-transfers").json()["rows"] == []
+        created = http.post("/api/fiat-transfers", json={
+            "kind": "deposit", "amount": "5000", "time": 1_700_000_000_000,
+            "note": "bank transfer",
+        })
+        assert created.status_code == 200
+        transfer_id = created.json()["id"]
+
+        listed = http.get("/api/fiat-transfers").json()["rows"]
+        assert len(listed) == 1
+        assert listed[0]["kind"] == "DEPOSIT"
+        assert listed[0]["amount"] == 5000
+        assert listed[0]["note"] == "bank transfer"
+
+        bad = http.post("/api/fiat-transfers", json={
+            "kind": "deposit", "amount": "-1", "time": 1_700_000_000_000,
+        })
+        assert bad.status_code == 400
+
+        deleted = http.delete(f"/api/fiat-transfers/{transfer_id}")
+        assert deleted.status_code == 200
+        assert http.get("/api/fiat-transfers").json()["rows"] == []
+        assert http.delete(f"/api/fiat-transfers/{transfer_id}").status_code == 404
+
     await client.close()
     store.close()

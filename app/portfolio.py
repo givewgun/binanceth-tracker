@@ -440,7 +440,7 @@ DUST = Decimal("0.00000001")
 
 def collect_events(store, since: Optional[int] = None) -> list[LedgerEvent]:
     events = [LedgerEvent(t.time, "trade", trade=t) for t in store.trades(since=since)]
-    for tr in store.transfers(since=since):
+    for tr in store.all_transfers(since=since):
         events.append(LedgerEvent(tr.time,
                                   "deposit" if tr.kind == "DEPOSIT" else "withdrawal",
                                   transfer=tr))
@@ -479,7 +479,7 @@ async def _build_simple(store, oracle: PriceOracle) -> PortfolioState:
         balances=store.balances(),
         oracle=oracle,
         holdings=holdings,
-        transfers=store.transfers(),
+        transfers=store.all_transfers(),
         fiat=settings.fiat,
     )
 
@@ -701,7 +701,7 @@ async def _history_simple(store, oracle: PriceOracle, *,
     except HoldingsError:
         manual = {}                      # the snapshot reports this properly
 
-    transfers = sorted(store.transfers(), key=lambda t: t.time)
+    transfers = store.all_transfers()
     fiat = settings.fiat
     engine = SimpleCostBasis(oracle, fiat=fiat)
     opening = opening_quantities(trades, balances, transfers)

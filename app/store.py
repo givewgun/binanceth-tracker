@@ -14,7 +14,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Iterable, Optional
 
-from .models import Balance, D, SymbolInfo, Trade, Transfer
+from .models import ZERO, Balance, D, SymbolInfo, Trade, Transfer
 
 SCHEMA = """
 PRAGMA journal_mode=WAL;
@@ -99,6 +99,19 @@ CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+-- Fiat movements the exchange's API never reports at all (Binance TH gives
+-- no deposit/withdrawal history for THB), logged by hand so the equity curve
+-- can date them instead of dumping the whole gap onto day one.
+CREATE TABLE IF NOT EXISTS manual_transfers (
+    id     INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind   TEXT NOT NULL,
+    asset  TEXT NOT NULL,
+    amount TEXT NOT NULL,
+    time   INTEGER NOT NULL,
+    note   TEXT DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_manual_transfers_time ON manual_transfers(time);
 """
 
 
@@ -308,6 +321,46 @@ class Store:
             for r in rows
         ]
 
+    # -- manual (fiat) transfers -------------------------------------------
+
+    def add_manual_transfer(self, kind: str, asset: str, amount: Decimal,
+                            time_: int, note: str = "") -> int:
+        with self._lock:
+            cur = self._db.execute(
+                "INSERT INTO manual_transfers(kind,asset,amount,time,note) "
+                "VALUES(?,?,?,?,?)",
+                (kind, asset, str(amount), time_, note),
+            )
+            self._db.commit()
+        return cur.lastrowid
+
+    def delete_manual_transfer(self, transfer_id: int) -> bool:
+        with self._lock:
+            cur = self._db.execute(
+                "DELETE FROM manual_transfers WHERE id=?", (transfer_id,))
+            self._db.commit()
+        return cur.rowcount > 0
+
+    def manual_transfers(self) -> list[Transfer]:
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT * FROM manual_transfers ORDER BY time ASC").fetchall()
+        return [
+            Transfer(
+                transfer_id=str(r["id"]), kind=r["kind"], asset=r["asset"],
+                amount=D(r["amount"]), fee=ZERO, time=r["time"],
+                network="manual", is_fiat=True, note=r["note"] or "",
+            )
+            for r in rows
+        ]
+
+    def all_transfers(self, since: Optional[int] = None) -> list[Transfer]:
+        """Reported transfers plus manually logged ones, merged by time."""
+        merged = self.transfers(since=since) + self.manual_transfers()
+        if since is not None:
+            merged = [t for t in merged if t.time >= since]
+        return sorted(merged, key=lambda t: t.time)
+
     # -- balances ---------------------------------------------------------
 
     def upsert_balances(self, balances: Iterable[Balance]) -> None:
@@ -429,6 +482,7 @@ class Store:
                 "trades": one("SELECT COUNT(*) FROM trades"),
                 "deposits": one("SELECT COUNT(*) FROM transfers WHERE kind='DEPOSIT'"),
                 "withdrawals": one("SELECT COUNT(*) FROM transfers WHERE kind='WITHDRAWAL'"),
+                "manual_transfers": one("SELECT COUNT(*) FROM manual_transfers"),
                 "symbols": one("SELECT COUNT(*) FROM symbols"),
                 "candles": one("SELECT COUNT(*) FROM candles"),
                 "first_trade": one("SELECT COALESCE(MIN(time),0) FROM trades"),

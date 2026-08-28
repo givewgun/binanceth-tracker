@@ -195,6 +195,36 @@
       <div class="card mini"><span class="label">Total withdrawn</span>
         <span class="value" id="sum-withdrawals">—</span></div>
     </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>THB deposits &amp; withdrawals (manual)</h2>
+      </div>
+      <p class="hint" style="margin: 0 0 12px;">Binance TH's API never reports
+        baht moving in or out of your account at all &#8212; log it here so the
+        equity curve can date it correctly instead of assuming it was always
+        there.</p>
+      <form id="form-fiat-transfer" class="filters">
+        <input type="date" id="ft-date" required>
+        <select id="ft-kind">
+          <option value="DEPOSIT">Deposit</option>
+          <option value="WITHDRAWAL">Withdrawal</option>
+        </select>
+        <input type="number" id="ft-amount" placeholder="Amount (THB)" min="0" step="0.01" required>
+        <input type="text" id="ft-note" placeholder="Note (optional)" maxlength="280">
+        <button type="submit" class="btn primary">Add</button>
+      </form>
+      <div class="table-scroll">
+        <table id="tbl-fiat-transfers">
+          <thead><tr>
+            <th>Date</th><th>Type</th><th class="r">Amount (THB)</th>
+            <th>Note</th><th></th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
     <div class="card">
       <div class="card-head">
         <h2>Deposits &amp; withdrawals</h2>
