@@ -10,7 +10,7 @@ from typing import Optional
 from .client import BinanceTHClient, BinanceTHError
 from .config import settings
 from .models import Money, Position
-from .portfolio import PortfolioState, build_history, build_portfolio
+from .portfolio import DAY_MS, PortfolioState, build_history, build_portfolio
 from .pricing import PriceOracle
 from .store import Store
 from .sync import Synchroniser
@@ -101,11 +101,13 @@ class PortfolioService:
             snapshot = await self.portfolio()
         except Exception:                                  # noqa: BLE001
             return
+        totals = self._totals(snapshot)
+        totals.update(await self._change_24h(snapshot))
         payload = {
             "type": "tick",
             "at": int(time.time() * 1000),
             "fx": num(self.oracle.usdt_thb()),
-            "totals": self._totals(snapshot),
+            "totals": totals,
             "prices": {
                 p.asset: {"thb": num(p.price.thb), "usdt": num(p.price.usdt),
                           "value_thb": num(p.market_value.thb),
@@ -202,6 +204,31 @@ class PortfolioService:
             "fx_rate": num(state.fx_rate),
         }
 
+    async def _change_24h(self, state: PortfolioState) -> dict:
+        """Pure price movement over the last 24h on today's holdings.
+
+        Deliberately ignores cost basis and deposits/withdrawals in between —
+        it answers "how did the market move", not "how did my P&L move",
+        which is what a 24h figure means everywhere else.
+        """
+        ts = int(time.time() * 1000) - DAY_MS
+        change = Money()
+        base = Money()
+        for p in state.positions.values():
+            if p.qty == 0:
+                continue
+            past = await self.oracle.historical_price_pair(p.asset, ts)
+            change = change + Money((p.price.thb - past.thb) * p.qty,
+                                    (p.price.usdt - past.usdt) * p.qty)
+            base = base + Money(past.thb * p.qty, past.usdt * p.qty)
+        return {
+            "pnl_24h": money(change),
+            "pnl_24h_pct": {
+                "thb": num(change.thb / base.thb * 100) if base.thb else 0.0,
+                "usdt": num(change.usdt / base.usdt * 100) if base.usdt else 0.0,
+            },
+        }
+
     def position_dict(self, p: Position, total_equity: Decimal) -> dict:
         weight = float(p.market_value.thb / total_equity * 100) if total_equity else 0.0
         return {
@@ -239,8 +266,10 @@ class PortfolioService:
             (self.position_dict(p, equity) for p in state.positions.values()),
             key=lambda d: d["value"]["thb"], reverse=True,
         )
+        totals = self._totals(state)
+        totals.update(await self._change_24h(state))
         return {
-            "totals": self._totals(state),
+            "totals": totals,
             "positions": positions,
             "warnings": [w.as_dict() for w in state.warnings],
             "meta": {

@@ -165,6 +165,12 @@ function renderKpis() {
   $('#kpi-equity-btc').textContent = t.equity_btc
     ? `₿ ${fmt(t.equity_btc, { digits: 6 })} BTC` : '';
 
+  const change24h = pick(t.pnl_24h);
+  const c24 = $('#kpi-24h');
+  c24.textContent = fmtMoney(change24h, { sign: true });
+  c24.className = 'value ' + signClass(change24h);
+  $('#kpi-24h-pct').textContent = fmtPct(t.pnl_24h_pct[state.ccy]) + ' last 24h';
+
   const unrealised = pick(t.unrealised);
   const un = $('#kpi-unrealised');
   un.textContent = fmtMoney(unrealised, { sign: true });
