@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import settings
@@ -16,6 +16,19 @@ from .service import money, num, service
 
 log = logging.getLogger("binanceth.api")
 STATIC = Path(__file__).parent / "static"
+
+# One version stamp per process start, from whichever static asset changed
+# most recently. Query-string-busts /static/app.js and styles.css on deploy
+# so browsers and Cloudflare's edge cache can't keep serving a stale build
+# behind a URL that never changes.
+_ASSET_VERSION = str(int(max(
+    (STATIC / "app.js").stat().st_mtime, (STATIC / "styles.css").stat().st_mtime,
+)))
+_INDEX_HTML = (
+    (STATIC / "index.html").read_text(encoding="utf-8")
+    .replace('href="/static/styles.css"', f'href="/static/styles.css?v={_ASSET_VERSION}"')
+    .replace('src="/static/app.js"', f'src="/static/app.js?v={_ASSET_VERSION}"')
+)
 
 
 @asynccontextmanager
@@ -31,7 +44,7 @@ app = FastAPI(title="Binance TH Portfolio Tracker", version="1.0.0",
 
 @app.get("/")
 async def index():
-    return FileResponse(STATIC / "index.html")
+    return HTMLResponse(_INDEX_HTML)
 
 
 @app.get("/api/status")
