@@ -124,7 +124,7 @@ def test_a_stale_cached_curve_is_rebuilt(tmp_path, monkeypatch):
     store, oracle = _seed(tmp_path, monkeypatch)
     zero = Money(D(0), D(0))
     for day, ts in (("2026-08-24", 1), ("2026-08-25", 2)):
-        store.upsert_equity(day, ts, zero, zero, zero, D(0), {})
+        store.upsert_equity(day, ts, zero, zero, zero, zero, {})
     store.set_meta("equity_history_sig", "built-by-older-code")
 
     service = PortfolioService.__new__(PortfolioService)
@@ -135,6 +135,70 @@ def test_a_stale_cached_curve_is_rebuilt(tmp_path, monkeypatch):
     assert len(rows) > 2, "the poisoned two-row cache was served"
     assert any(r["equity"]["thb"] for r in rows), "every row still reads zero"
     assert store.get_meta("equity_history_sig") == service._history_signature()
+
+
+def _seed_with_transfer(tmp_path, monkeypatch):
+    """A book funded by two buys, with a reported withdrawal in between."""
+    from app.config import settings
+    from app.models import Balance, Trade, Transfer
+    from app.store import Store
+    from tests.conftest import FakeOracle
+
+    day = 86_400_000
+    t0 = 1_700_000_000_000
+
+    def trade(tid, side, price, qty, ts):
+        price, qty = D(price), D(qty)
+        return Trade(trade_id=tid, symbol="USDTTHB", base_asset="USDT",
+                     quote_asset="THB", side=side, price=price, qty=qty,
+                     quote_qty=price * qty, fee=D(0), fee_asset="THB", time=ts)
+
+    store = Store(tmp_path / "h2.db")
+    store.upsert_trades([
+        trade("1", "BUY", "34", "1000", t0),
+        trade("2", "BUY", "34", "100", t0 + 2 * day),
+    ])
+    store.upsert_transfers([
+        Transfer(transfer_id="w1", kind="WITHDRAWAL", asset="USDT",
+                 amount=D("400"), fee=D(0), time=t0 + day),
+    ])
+    # 1000 bought, 400 withdrawn, 100 more bought: 700 exactly — nothing left
+    # over for `_settle_outflows` to guess at.
+    store.upsert_balances([Balance(asset="USDT", free=D("700"), locked=D(0))])
+    store.upsert_candles("USDTTHB", "1d",
+                         [(t0 + n * day, D("34")) for n in range(-1, 5)])
+    monkeypatch.setattr(settings, "cost_basis_method", "simple")
+    monkeypatch.setattr(settings, "holdings_file", str(tmp_path / "absent.toml"))
+    return store, FakeOracle(spot={"USDTTHB": "34"})
+
+
+def test_withdrawal_lands_on_its_own_day_not_the_last_one(tmp_path, monkeypatch):
+    """A reported withdrawal used to only leave the book once the whole trade
+    list was replayed — today, no matter how long ago it actually happened.
+    It must drop out of the curve on its own transfer date instead."""
+    from app.portfolio import build_history
+
+    store, oracle = _seed_with_transfer(tmp_path, monkeypatch)
+    rows = asyncio.run(build_history(store, oracle, persist=False))
+    by_day = {r["day"]: r for r in rows}
+
+    day = 86_400_000
+    from app.portfolio import day_key
+    t0 = 1_700_000_000_000
+
+    before = by_day[day_key(t0)]           # day of the first buy
+    after = by_day[day_key(t0 + day)]      # day of the withdrawal
+    later = by_day[day_key(t0 + 2 * day)]  # day of the second buy
+
+    # cost_usdt isolates the USDT book (unlike equity_thb/equity_usdt, it
+    # isn't muddied by the THB the account is separately credited up front —
+    # a different, pre-existing quirk this test isn't about).
+    assert D(before["cost_usdt"]) == D("1000"), "1000 USDT bought, withdrawal not seen yet"
+    assert D(after["cost_usdt"]) == D("600"), \
+        "the withdrawal must remove 400 USDT the same day it was reported"
+    assert D(later["cost_usdt"]) == D("700"), "700 USDT after the later buy"
+    assert D(rows[-1]["cost_usdt"]) == D("700"), \
+        "the curve must not carry a phantom second drop on its final day"
 
 
 def test_a_matching_cache_is_reused(tmp_path, monkeypatch):

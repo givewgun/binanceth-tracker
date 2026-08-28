@@ -235,13 +235,18 @@ class SimpleCostBasis:
 # ---------------------------------------------------------------------------
 
 
-def opening_quantities(trades: Iterable[Trade],
-                       balances: Iterable[Balance]) -> dict[str, Decimal]:
+def opening_quantities(trades: Iterable[Trade], balances: Iterable[Balance],
+                       transfers: Iterable = ()) -> dict[str, Decimal]:
     """Quantity held before the trade history begins, per asset.
 
-    The difference between what you hold and what the fills add up to. Positive
-    means coins arrived before the record starts (or were sold out of a bag
-    that did); negative means coins left by a route the API never reported.
+    The difference between what you hold and what the fills — and any
+    *reported* transfer — add up to. Positive means coins arrived by some
+    route the API doesn't return at all (or were sold out of a bag that did);
+    negative means coins left the same way. Reported deposits and withdrawals
+    are netted out here too, even though they don't predate the record: they
+    still aren't in ``trades``, and leaving them in this gap would double-count
+    them once :func:`app.portfolio._history_simple` (or
+    :func:`build_simple_state` below) also applies them on their own date.
     """
     net: dict[str, Decimal] = defaultdict(lambda: ZERO)
     for t in trades:
@@ -250,11 +255,47 @@ def opening_quantities(trades: Iterable[Trade],
         net[t.quote_asset] += -t.quote_qty if t.side == "BUY" else t.quote_qty
         if t.fee > 0 and t.fee_asset:
             net[t.fee_asset] -= t.fee
+    for tr in transfers:
+        net[tr.asset] += tr.amount if tr.kind == "DEPOSIT" else -(tr.amount + tr.fee)
 
     held = {b.asset: b.free + b.locked for b in balances}
     assets = set(net) | set(held)
     assets.discard("")
     return {a: held.get(a, ZERO) - net.get(a, ZERO) for a in assets}
+
+
+def apply_transfer(engine: "SimpleCostBasis", tr, value: Money, fiat: str) -> None:
+    """Move a reported deposit or withdrawal into or out of the book, dated to
+    when it actually happened.
+
+    Without this, a transfer's quantity only shows up as a gap between the
+    trade replay and the current balance — and that gap gets attributed to
+    the first or last day of the whole record (see ``opening_quantities`` and
+    ``_settle_outflows`` in :mod:`app.portfolio`), regardless of when the
+    transfer's own timestamp says it really happened.
+    """
+    if tr.asset.upper() == fiat.upper():
+        return                            # cash is cash; carries no basis
+    book = engine.book(tr.asset)
+    if tr.kind == "DEPOSIT":
+        book.add(tr.amount, value)
+        engine.warn(
+            "deposit_basis",
+            f"{tr.asset} arrived by deposit, so no purchase price exists on "
+            f"this exchange. It is costed at the market price on arrival.",
+            tr.asset, tr.time,
+        )
+        return
+    gross = tr.amount + tr.fee
+    from_unknown = min(gross, book.unknown_qty)
+    book.unknown_qty -= from_unknown
+    book.remove_costed(gross - from_unknown)
+    engine.warn(
+        "withdrawal_basis",
+        f"{gross:f} {tr.asset} left by withdrawal. The cost basis was "
+        f"reduced to match and no profit was booked.",
+        tr.asset, tr.time,
+    )
 
 
 async def build_simple_state(*, trades: Iterable[Trade],
@@ -268,10 +309,11 @@ async def build_simple_state(*, trades: Iterable[Trade],
 
     trades = list(trades)
     balances = list(balances)
+    transfers = list(transfers or ())
     holdings = holdings or {}
     engine = SimpleCostBasis(oracle, fiat=fiat)
 
-    opening = opening_quantities(trades, balances)
+    opening = opening_quantities(trades, balances, transfers)
     for asset in sorted(opening):
         if asset.upper() == fiat:
             continue                     # cash is cash; it carries no basis
@@ -284,6 +326,23 @@ async def build_simple_state(*, trades: Iterable[Trade],
         fees_paid=engine.fees_paid,
         fx_rate=oracle.usdt_thb(),
     )
+
+    # Reported transfers, plus the baht the venue never reports at all: the
+    # account cannot have spent more fiat than it held without funding from
+    # somewhere, and leaving that out makes "net deposited" — and every total
+    # return computed against it — meaningless. Applied to the book here too,
+    # before reconciliation, so a deposit or withdrawal gets its own date's
+    # cost instead of being folded into `opening`'s pre-history guess.
+    for transfer in transfers:
+        # Valued when it happened: a 2024 deposit is worth its 2024 baht, not
+        # what the same coins would fetch today.
+        value = await oracle.historical_value(transfer.asset, transfer.amount,
+                                              transfer.time)
+        apply_transfer(engine, transfer, value, fiat)
+        if transfer.kind == "DEPOSIT":
+            state.deposits_value = state.deposits_value + value
+        else:
+            state.withdrawals_value = state.withdrawals_value + value
 
     held = {b.asset: b for b in balances}
     for asset in sorted(set(engine.books) | set(held)):
@@ -324,20 +383,10 @@ async def build_simple_state(*, trades: Iterable[Trade],
 
     state.cash = state.positions[fiat].qty if fiat in state.positions else ZERO
 
-    # Reported transfers, plus the baht the venue never reports at all: the
-    # account cannot have spent more fiat than it held without funding from
-    # somewhere, and leaving that out makes "net deposited" — and every total
+    # The baht the venue never reports at all still has to have come from
+    # somewhere, and leaving it out makes "net deposited" — and every total
     # return computed against it — meaningless.
     fx = oracle.usdt_thb() or ZERO
-    for transfer in transfers or ():
-        # Valued when it happened: a 2024 deposit is worth its 2024 baht, not
-        # what the same coins would fetch today.
-        value = await oracle.historical_value(transfer.asset, transfer.amount,
-                                              transfer.time)
-        if transfer.kind == "DEPOSIT":
-            state.deposits_value = state.deposits_value + value
-        else:
-            state.withdrawals_value = state.withdrawals_value + value
     unreported = opening.get(fiat, ZERO)
     if unreported > 0:
         state.deposits_value = state.deposits_value + Money(

@@ -688,7 +688,7 @@ async def _history_simple(store, oracle: PriceOracle, *,
     """Daily curve under average-cost accounting."""
     import time as _time
 
-    from .costbasis_simple import SimpleCostBasis, opening_quantities
+    from .costbasis_simple import SimpleCostBasis, apply_transfer, opening_quantities
     from .holdings import HoldingsError, load_holdings
 
     trades = sorted(store.trades(), key=lambda t: (t.time, str(t.trade_id)))
@@ -701,9 +701,10 @@ async def _history_simple(store, oracle: PriceOracle, *,
     except HoldingsError:
         manual = {}                      # the snapshot reports this properly
 
+    transfers = sorted(store.transfers(), key=lambda t: t.time)
     fiat = settings.fiat
     engine = SimpleCostBasis(oracle, fiat=fiat)
-    opening = opening_quantities(trades, balances)
+    opening = opening_quantities(trades, balances, transfers)
     pending_outflow: dict[str, Decimal] = {}
     opening_fiat = ZERO
     for asset, qty in sorted(opening.items()):
@@ -725,7 +726,6 @@ async def _history_simple(store, oracle: PriceOracle, *,
             # point, and the final one especially, matching the real balance.
             pending_outflow[asset] = -qty
 
-    transfers = sorted(store.transfers(), key=lambda t: t.time)
     first = min([t.time for t in trades] + [t.time for t in transfers if t.time]
                 or [int(_time.time() * 1000)])
     start_day = first // DAY_MS
@@ -757,6 +757,7 @@ async def _history_simple(store, oracle: PriceOracle, *,
             tr = transfers[tidx]
             price = _cached_price_pair(store, oracle, tr.asset, tr.time)
             value = Money(price.thb * tr.amount, price.usdt * tr.amount)
+            apply_transfer(engine, tr, value, fiat)
             if tr.kind == "DEPOSIT":
                 deposits = deposits + value
             else:
@@ -799,7 +800,7 @@ async def _history_simple(store, oracle: PriceOracle, *,
         })
         if persist:
             store.upsert_equity(key, day_end, equity, cost, realised,
-                                net_deposit.thb, {"holdings": holdings})
+                                net_deposit, {"holdings": holdings})
     return out
 
 
@@ -927,5 +928,5 @@ async def _history_fifo(store, oracle: PriceOracle, *,
         out.append(row)
         if persist:
             store.upsert_equity(key, day_end, equity, cost, realised,
-                                net_deposit.thb, {"holdings": holdings})
+                                net_deposit, {"holdings": holdings})
     return out

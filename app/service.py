@@ -314,7 +314,7 @@ class PortfolioService:
 
     #: Bumped whenever the curve's arithmetic changes, so a cache built by
     #: older code is rebuilt rather than served forever.
-    HISTORY_VERSION = 2
+    HISTORY_VERSION = 3
 
     def _history_signature(self) -> str:
         """What the cached curve was built from."""

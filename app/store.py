@@ -91,6 +91,7 @@ CREATE TABLE IF NOT EXISTS equity_history (
     realised_thb    TEXT NOT NULL,
     realised_usdt   TEXT NOT NULL,
     net_deposit_thb TEXT NOT NULL DEFAULT '0',
+    net_deposit_usdt TEXT NOT NULL DEFAULT '0',
     detail          TEXT DEFAULT '{}'
 );
 
@@ -112,6 +113,12 @@ class Store:
         self._db.row_factory = sqlite3.Row
         with self._lock:
             self._db.executescript(SCHEMA)
+            try:
+                self._db.execute(
+                    "ALTER TABLE equity_history ADD COLUMN "
+                    "net_deposit_usdt TEXT NOT NULL DEFAULT '0'")
+            except sqlite3.OperationalError:
+                pass                      # already migrated
             self._db.commit()
 
     def close(self) -> None:
@@ -376,20 +383,23 @@ class Store:
     # -- equity history ---------------------------------------------------
 
     def upsert_equity(self, day: str, ts: int, equity, cost, realised,
-                      net_deposit_thb: Decimal, detail: dict) -> None:
+                      net_deposit, detail: dict) -> None:
         with self._lock:
             self._db.execute(
                 "INSERT INTO equity_history(day,ts,equity_thb,equity_usdt,cost_thb,"
-                "cost_usdt,realised_thb,realised_usdt,net_deposit_thb,detail) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?) "
+                "cost_usdt,realised_thb,realised_usdt,net_deposit_thb,"
+                "net_deposit_usdt,detail) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?) "
                 "ON CONFLICT(day) DO UPDATE SET ts=excluded.ts,"
                 "equity_thb=excluded.equity_thb, equity_usdt=excluded.equity_usdt,"
                 "cost_thb=excluded.cost_thb, cost_usdt=excluded.cost_usdt,"
                 "realised_thb=excluded.realised_thb, realised_usdt=excluded.realised_usdt,"
-                "net_deposit_thb=excluded.net_deposit_thb, detail=excluded.detail",
+                "net_deposit_thb=excluded.net_deposit_thb, "
+                "net_deposit_usdt=excluded.net_deposit_usdt, detail=excluded.detail",
                 (day, ts, str(equity.thb), str(equity.usdt), str(cost.thb),
                  str(cost.usdt), str(realised.thb), str(realised.usdt),
-                 str(net_deposit_thb), json.dumps(detail, default=str)),
+                 str(net_deposit.thb), str(net_deposit.usdt),
+                 json.dumps(detail, default=str)),
             )
             self._db.commit()
 
