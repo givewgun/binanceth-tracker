@@ -90,7 +90,11 @@
   <!-- ── overview ─────────────────────────────────────────────────── -->
   <section class="tab-panel active" id="tab-overview">
     <div class="grid-2">
-      <div class="card">
+      <!-- Hidden: Binance TH's API reports no THB deposit/withdrawal history
+           at all, so until enough manual entries are logged (Deposits &
+           withdrawals tab) this curve credits the whole opening balance to
+           day one of the trade history and reads as wrong. -->
+      <div class="card" hidden>
         <div class="card-head">
           <h2>Equity over time</h2>
           <div class="seg" id="hist-range">
